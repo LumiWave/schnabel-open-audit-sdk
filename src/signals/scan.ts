@@ -1,6 +1,7 @@
 import type { NormalizedInput } from "../normalizer/types.js";
 import type { Finding } from "./types.js";
 import type { Scanner, ScannerContext } from "./scanners/scanner.js";
+import { ensureViews } from "./views.js";
 
 export interface ScanOptions {
   mode?: "runtime" | "audit";
@@ -24,6 +25,7 @@ function isFailFastHit(risk: Finding["risk"], threshold: NonNullable<ScanOptions
  * - Allows scanners to mutate the working input (sanitizers).
  * - Aggregates findings.
  * - Optionally stops early (failFast).
+ * - Ensures multi-view (raw/sanitized/revealed) is initialized at chain start.
  */
 export async function scanSignals(
   input: NormalizedInput,
@@ -40,13 +42,15 @@ export async function scanSignals(
   const failFastRisk = options.failFastRisk ?? "high";
 
   // Working input that can be updated by sanitizers
-  let current = input;
+  let current = ensureViews(input);
 
   for (const scanner of scanners) {
     const out = await scanner.run(current, ctx);
 
-    // Update current input for the next scanners
-    current = out.input;
+    // Preserve views across scanners (in case a scanner forgets to carry it)
+    const next = out.input.views ? out.input : { ...out.input, views: current.views };
+
+    current = ensureViews(next);
 
     if (out.findings.length) findings.push(...out.findings);
 

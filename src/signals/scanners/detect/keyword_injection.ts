@@ -1,7 +1,8 @@
 import type { Scanner } from "../scanner.js";
 import type { Finding, RiskLevel } from "../../types.js";
-import type { NormalizedInput } from "../../../normalizer/types.js";
+import type { NormalizedInput, TextView } from "../../../normalizer/types.js";
 import { makeFindingId } from "../../util.js";
+import { ensureViews, VIEW_SCAN_ORDER, pickPreferredView } from "../../views.js";
 
 type PatternSpec = {
   key: string;
@@ -31,52 +32,79 @@ const PATTERNS: PatternSpec[] = [
   },
 ];
 
+function matchViews(re: RegExp, viewMap: Record<string, string>): TextView[] {
+  const matched: TextView[] = [];
+  for (const v of VIEW_SCAN_ORDER) {
+    const text = (viewMap as any)[v] ?? "";
+    if (re.test(text)) matched.push(v);
+  }
+  return matched;
+}
+
 /**
  * KeywordInjectionScanner
- * - Minimal demo scanner:
- *   - scans canonical prompt
- *   - scans provenance chunks (if present)
- * - Produces Findings with target info (prompt vs retrieval/system/user chunk)
+ * - Scans multiple views (raw/sanitized/revealed) without double-counting
+ * - Emits a single Finding per (pattern, target), with matchedViews evidence
  */
 export const KeywordInjectionScanner: Scanner = {
   name: "keyword_injection",
   kind: "detect",
 
   async run(input: NormalizedInput) {
+    const base = ensureViews(input);
+    const views = base.views!;
     const findings: Finding[] = [];
 
-    const check = (text: string, target: Finding["target"], requestId: string) => {
-      for (const p of PATTERNS) {
-        if (p.re.test(text)) {
-          findings.push({
-            id: makeFindingId(
-              this.name,
-              requestId,
-              `${p.key}:${target.field}:${target.source ?? "n/a"}:${target.chunkIndex ?? -1}`
-            ),
-            kind: this.kind,
-            scanner: this.name,
-            score: p.score,
-            risk: p.risk,
-            tags: p.tags,
-            summary: p.summary,
-            target,
-            evidence: { pattern: p.key },
-          });
-        }
-      }
-    };
+    // 1) Prompt
+    for (const p of PATTERNS) {
+      const matchedViews = matchViews(p.re, views.prompt as any);
+      if (!matchedViews.length) continue;
 
-    // 1) Scan canonical prompt
-    check(input.canonical.prompt, { field: "prompt" }, input.requestId);
-
-    // 2) Scan provenance chunks if provided
-    const chunks = input.canonical.promptChunksCanonical ?? [];
-    for (let i = 0; i < chunks.length; i++) {
-      const ch = chunks[i];
-      check(ch.text, { field: "promptChunk", source: ch.source, chunkIndex: i }, input.requestId);
+      const view = pickPreferredView(matchedViews);
+      findings.push({
+        id: makeFindingId(this.name, base.requestId, `${p.key}:prompt`),
+        kind: this.kind,
+        scanner: this.name,
+        score: p.score,
+        risk: p.risk,
+        tags: p.tags,
+        summary: p.summary,
+        target: { field: "prompt", view },
+        evidence: {
+          pattern: p.key,
+          matchedViews,
+        },
+      });
     }
 
-    return { input, findings };
+    // 2) Chunks
+    const chunks = views.chunks ?? [];
+    for (let i = 0; i < chunks.length; i++) {
+      const ch = chunks[i];
+      const viewMap = ch.views as any;
+
+      for (const p of PATTERNS) {
+        const matchedViews = matchViews(p.re, viewMap);
+        if (!matchedViews.length) continue;
+
+        const view = pickPreferredView(matchedViews);
+        findings.push({
+          id: makeFindingId(this.name, base.requestId, `${p.key}:chunk:${i}:${ch.source}`),
+          kind: this.kind,
+          scanner: this.name,
+          score: p.score,
+          risk: p.risk,
+          tags: p.tags,
+          summary: p.summary,
+          target: { field: "promptChunk", view, source: ch.source, chunkIndex: i },
+          evidence: {
+            pattern: p.key,
+            matchedViews,
+          },
+        });
+      }
+    }
+
+    return { input: base, findings };
   },
 };

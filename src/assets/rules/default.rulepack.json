@@ -1,0 +1,113 @@
+{
+    "version": "default-v0",
+    "rules": [
+        {
+            "id": "exfil.system_prompt.reveal_system_prompt",
+            "category": "prompt_exfiltration",
+            "patternType": "regex",
+            "pattern": "(system\\s+prompt|reveal\\s+.*system)",
+            "flags": "i",
+            "risk": "high",
+            "score": 0.8,
+            "tags": [
+                "prompt_exfil",
+                "system_disclosure"
+            ],
+            "summary": "System prompt disclosure attempt detected."
+        },
+        {
+            "id": "auth.impersonation.admin_claim.en",
+            "category": "authority_impersonation",
+            "patternType": "regex",
+            "pattern": "\\b(i am|i'm)\\s+(an?\\s+)?(admin|administrator|system|moderator)\\b",
+            "flags": "i",
+            "risk": "high",
+            "score": 0.75,
+            "tags": [
+                "role_spoof",
+                "authority"
+            ],
+            "summary": "Authority impersonation attempt detected."
+        },
+        {
+            "id": "auth.impersonation.admin_claim.ko",
+            "category": "authority_impersonation",
+            "patternType": "regex",
+            "pattern": "(나는|전)\\s*(관리자|운영자|시스템)\\s*(야|입니다)?",
+            "flags": "i",
+            "risk": "high",
+            "score": 0.75,
+            "tags": [
+                "role_spoof",
+                "authority",
+                "ko"
+            ],
+            "summary": "Authority impersonation attempt detected (Korean)."
+        },
+        {
+            "id": "secrets.request.password.en",
+            "category": "secrets_request",
+            "patternType": "regex",
+            "pattern": "(tell me|give me|share|what is)\\s+.*(password|passcode|pin)",
+            "flags": "i",
+            "risk": "medium",
+            "score": 0.55,
+            "tags": [
+                "secrets",
+                "credential"
+            ],
+            "summary": "Credential request attempt detected."
+        },
+        {
+            "id": "secrets.request.password.ko",
+            "category": "secrets_request",
+            "patternType": "regex",
+            "pattern": "(비밀번호|패스워드|핀번호).*(알려|말해|줘|뭐야)",
+            "flags": "i",
+            "risk": "medium",
+            "score": 0.55,
+            "tags": [
+                "secrets",
+                "credential",
+                "ko"
+            ],
+            "summary": "Credential request attempt detected (Korean)."
+        },
+        {
+            "id": "indirect_injection.retrieval.override_only",
+            "category": "indirect_injection",
+            "patternType": "regex",
+            "pattern": "ignore\\s+(all|any|previous)\\s+instructions",
+            "flags": "i",
+            "risk": "high",
+            "score": 0.8,
+            "tags": [
+                "indirect_injection",
+                "retrieval"
+            ],
+            "summary": "Indirect injection pattern detected in retrieval context.",
+            "scopes": [
+                "chunks"
+            ],
+            "sources": [
+                "retrieval"
+            ]
+        },
+        {
+            "id": "injection.override.ignore_previous_instructions",
+            "category": "prompt_injection",
+            "patternType": "regex",
+            "pattern": "ignore\\s+(all|any|previous)\\s+instructions",
+            "flags": "i",
+
+            "negativePattern": "\\b(never|don't|do not)\\s+ignore\\s+(all|any|previous)\\s+instructions\\b",
+            "negativeFlags": "i",
+
+            "risk": "high",
+            "score": 0.8,
+            "tags": ["prompt_injection", "override"],
+            "summary": "Instruction override attempt detected."
+        }
+
+    ]
+}

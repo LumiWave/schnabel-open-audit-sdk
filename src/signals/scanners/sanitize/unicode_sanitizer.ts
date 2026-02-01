@@ -1,7 +1,8 @@
 import type { Scanner } from "../scanner.js";
 import type { Finding, RiskLevel } from "../../types.js";
-import type { NormalizedInput, SourcedText } from "../../../normalizer/types.js";
+import type { NormalizedInput } from "../../../normalizer/types.js";
 import { makeFindingId } from "../../util.js";
+import { ensureViews } from "../../views.js";
 
 /**
  * Zero-width / invisible chars commonly used for obfuscation.
@@ -21,46 +22,30 @@ type SanitizeStats = {
 };
 
 function sanitizeText(raw: string): { text: string; stats: SanitizeStats } {
-  let s = raw;
-  const before = s;
+  const before = raw;
 
-  // 1) NFKC normalization
-  const nfkc = s.normalize("NFKC");
-  const nfkcApplied = nfkc !== s;
-  s = nfkc;
+  const nfkc = raw.normalize("NFKC");
+  const nfkcApplied = nfkc !== raw;
 
-  // 2) Remove invisible/zero-width chars
-  const beforeInv = s;
-  s = s.replace(INVISIBLE_REGEX, "");
-  const removedInvisibleCount = beforeInv.length - s.length;
+  const beforeInv = nfkc;
+  const noInv = nfkc.replace(INVISIBLE_REGEX, "");
+  const removedInvisibleCount = beforeInv.length - noInv.length;
 
-  // 3) Remove bidi controls
-  const beforeBidi = s;
-  s = s.replace(BIDI_REGEX, "");
-  const removedBidiCount = beforeBidi.length - s.length;
+  const beforeBidi = noInv;
+  const noBidi = noInv.replace(BIDI_REGEX, "");
+  const removedBidiCount = beforeBidi.length - noBidi.length;
 
-  // 4) Final trim to avoid accidental leading/trailing whitespace after removals
-  s = s.trim();
-
+  const text = noBidi.trim();
   const changed =
-    s !== before ||
+    text !== before.trim() ||
     nfkcApplied ||
     removedInvisibleCount > 0 ||
     removedBidiCount > 0;
 
-  return {
-    text: s,
-    stats: {
-      nfkcApplied,
-      removedInvisibleCount,
-      removedBidiCount,
-      changed,
-    },
-  };
+  return { text, stats: { nfkcApplied, removedInvisibleCount, removedBidiCount, changed } };
 }
 
 function riskFrom(stats: SanitizeStats): { risk: RiskLevel; score: number } {
-  // Conservative defaults: obfuscation signals are suspicious, but not always "high".
   if (stats.removedBidiCount > 0) return { risk: "medium", score: 0.6 };
   if (stats.removedInvisibleCount > 0) return { risk: "medium", score: 0.5 };
   if (stats.nfkcApplied) return { risk: "low", score: 0.2 };
@@ -69,94 +54,95 @@ function riskFrom(stats: SanitizeStats): { risk: RiskLevel; score: number } {
 
 /**
  * UnicodeSanitizerScanner
- * - Mutates canonical prompt + promptChunksCanonical (if present) by applying:
- *   - NFKC normalization
- *   - removal of common invisible/zero-width chars
- *   - removal of bidi controls
- * - Emits Findings only when changes are made (or suspicious transforms detected).
+ * - Updates canonical + views.sanitized/revealed
+ * - Keeps views.raw unchanged
  */
 export const UnicodeSanitizerScanner: Scanner = {
   name: "unicode_sanitizer",
   kind: "sanitize",
 
   async run(input: NormalizedInput) {
+    const base = ensureViews(input);
+    const views = base.views!;
     const findings: Finding[] = [];
 
-    // Sanitize canonical prompt
-    const p = sanitizeText(input.canonical.prompt);
-    const pRisk = riskFrom(p.stats);
+    let changed = false;
 
-    if (p.stats.changed && pRisk.risk !== "none") {
+    // Prompt
+    const p0 = base.canonical.prompt;
+    const p = sanitizeText(p0);
+    if (p.stats.changed) {
+      changed = true;
+
+      // Update canonical to sanitized baseline (so detectors without views still benefit)
+      // Also update views.sanitized and views.revealed
+      views.prompt.sanitized = p.text;
+      views.prompt.revealed = p.text;
+    }
+
+    // Chunks
+    const chunks = base.canonical.promptChunksCanonical ?? [];
+    const outChunks = chunks.map((ch, i) => {
+      const res = sanitizeText(ch.text);
+      if (res.stats.changed) {
+        changed = true;
+        const cv = views.chunks?.[i];
+        if (cv) {
+          cv.views.sanitized = res.text;
+          cv.views.revealed = res.text;
+        }
+      }
+      return { ...ch, text: res.text };
+    });
+
+    // Findings (only if suspicious)
+    const pr = riskFrom(p.stats);
+    if (p.stats.changed && pr.risk !== "none") {
       findings.push({
-        id: makeFindingId(this.name, input.requestId, `prompt`),
+        id: makeFindingId(this.name, base.requestId, "prompt"),
         kind: this.kind,
         scanner: this.name,
-        score: pRisk.score,
-        risk: pRisk.risk,
+        score: pr.score,
+        risk: pr.risk,
         tags: ["unicode", "sanitization", "obfuscation"],
-        summary: "Unicode sanitization applied to canonical prompt.",
-        target: { field: "prompt" },
-        evidence: {
-          nfkcApplied: p.stats.nfkcApplied,
-          removedInvisibleCount: p.stats.removedInvisibleCount,
-          removedBidiCount: p.stats.removedBidiCount,
-        },
+        summary: "Unicode sanitization applied (NFKC / zero-width / bidi).",
+        target: { field: "prompt", view: "sanitized" },
+        evidence: p.stats,
       });
     }
 
-    // Sanitize provenance chunks if present
-    const inChunks = input.canonical.promptChunksCanonical ?? [];
-    const outChunks: SourcedText[] = [];
-    let anyChunkChanged = false;
-
-    for (let i = 0; i < inChunks.length; i++) {
-      const ch = inChunks[i];
-      const s = sanitizeText(ch.text);
-      const r = riskFrom(s.stats);
-
-      outChunks.push({ source: ch.source, text: s.text });
-
-      if (s.stats.changed) anyChunkChanged = true;
-
-      if (s.stats.changed && r.risk !== "none") {
+    for (let i = 0; i < chunks.length; i++) {
+      const res = sanitizeText(chunks[i].text);
+      const rr = riskFrom(res.stats);
+      if (res.stats.changed && rr.risk !== "none") {
         findings.push({
-          id: makeFindingId(this.name, input.requestId, `chunk:${i}:${ch.source}`),
+          id: makeFindingId(this.name, base.requestId, `chunk:${i}:${chunks[i].source}`),
           kind: this.kind,
           scanner: this.name,
-          score: r.score,
-          risk: r.risk,
+          score: rr.score,
+          risk: rr.risk,
           tags: ["unicode", "sanitization", "obfuscation"],
-          summary: "Unicode sanitization applied to provenance chunk.",
-          target: { field: "promptChunk", source: ch.source, chunkIndex: i },
-          evidence: {
-            nfkcApplied: s.stats.nfkcApplied,
-            removedInvisibleCount: s.stats.removedInvisibleCount,
-            removedBidiCount: s.stats.removedBidiCount,
-          },
+          summary: "Unicode sanitization applied to chunk (NFKC / zero-width / bidi).",
+          target: { field: "promptChunk", view: "sanitized", source: chunks[i].source, chunkIndex: i },
+          evidence: res.stats,
         });
       }
     }
 
-    // Build updated input if anything changed; otherwise keep original reference.
-    const promptChanged = p.text !== input.canonical.prompt;
-    const chunksChanged = anyChunkChanged;
-
-    if (!promptChanged && !chunksChanged) {
-      return { input, findings };
-    }
+    if (!changed) return { input: base, findings };
 
     const updated: NormalizedInput = {
-      ...input,
+      ...base,
       canonical: {
-        ...input.canonical,
-        prompt: p.text,
-        promptChunksCanonical: inChunks.length ? outChunks : undefined,
+        ...base.canonical,
+        prompt: views.prompt.sanitized,
+        promptChunksCanonical: outChunks.length ? outChunks : undefined,
       },
       features: {
-        ...input.features,
-        // Keep features consistent with the new canonical prompt
-        promptLength: p.text.length,
+        ...base.features,
+        promptLength: views.prompt.revealed.length,
       },
+      views,
     };
 
     return { input: updated, findings };
