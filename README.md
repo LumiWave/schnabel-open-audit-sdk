@@ -1,12 +1,13 @@
-#  ____   ____  _   _ _   _    _    ____  _____ _
-# / ___| / ___|| | | | \ | |  / \  | __ )| ____| |
-# \___ \| |    | |_| |  \| | / _ \ |  _ \|  _| | |
-#  ___) | |___ |  _  | |\  |/ ___ \| |_) | |___| |___
-# |____/ \____||_| |_|_| \_/_/   \_\____/|_____|_____|
-#
-# Schnabel Open Audit SDK
-# Evidence-first • Provenance-aware • Obfuscation-resistant • Benchmark-driven (planned)
+```text
+  ____   ____  _   _ _   _    _    ____  _____ _
+ / ___| / ___|| | | | \ | |  / \  | __ )| ____| |
+ \___ \| |    | |_| |  \| | / _ \ |  _ \|  _| | |
+  ___) | |___ |  _  | |\  |/ ___ \| |_) | |___| |___
+ |____/ \____||_| |_|_| \_/_/   \_\____/|_____|_____|
 
+Schnabel Open Audit SDK
+Evidence-first • Provenance-aware • Obfuscation-resistant • Benchmark-driven (planned)
+```
 Schnabel is a **Node.js/TypeScript Open Audit SDK** for LLM/agent runtimes.
 It standardizes raw inputs, runs a **chain of scanners** (sanitizers + detectors), and produces **structured Findings**
 that later drive policy decisions and evidence packages.
@@ -115,3 +116,6 @@ Detect:
 ### Install
 ```bash
 npm install
+
+
+
