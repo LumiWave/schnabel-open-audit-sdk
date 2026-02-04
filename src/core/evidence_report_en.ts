@@ -1,175 +1,173 @@
 import type { EvidencePackageV0 } from "./evidence_package.js";
 
-export interface ReportOptions {
-  maxPreviewChars?: number;          // default 180
-  includeIntegrityItems?: boolean;   // default true
-  includeFindingsList?: boolean;     // default true
-}
-
 type RiskLevel = "none" | "low" | "medium" | "high" | "critical";
-type TextView = "raw" | "sanitized" | "revealed" | "skeleton";
+
+export interface ReportOptions {
+  maxPreviewChars?: number; // default 140
+  showDetails?: boolean;    // default false (human-friendly)
+}
 
 const RISK_ORDER: RiskLevel[] = ["none", "low", "medium", "high", "critical"];
 
 function clip(s: string, n: number): string {
-  const t = (s ?? "").toString();
+  const t = (s ?? "").toString().replace(/\s+/g, " ").trim();
   if (t.length <= n) return t;
   return t.slice(0, n) + "…";
 }
 
-function countByRisk(findings: any[]): Record<RiskLevel, number> {
-  const out: Record<RiskLevel, number> = { none: 0, low: 0, medium: 0, high: 0, critical: 0 };
-  for (const f of findings) out[f.risk] = (out[f.risk] ?? 0) + 1;
-  return out;
+function topDetectFinding(e: EvidencePackageV0) {
+  const detect = (e.findings ?? []).filter((f: any) => f.kind === "detect");
+  if (!detect.length) return null;
+
+  detect.sort((a: any, b: any) => {
+    const ra = RISK_ORDER.indexOf(a.risk);
+    const rb = RISK_ORDER.indexOf(b.risk);
+    if (rb !== ra) return rb - ra;
+    return (b.score ?? 0) - (a.score ?? 0);
+  });
+
+  return detect[0];
 }
 
-function countByView(findings: any[]): Record<TextView, number> {
-  const out: Record<TextView, number> = { raw: 0, sanitized: 0, revealed: 0, skeleton: 0 };
-  for (const f of findings) {
-    const set = new Set<TextView>();
-    if (f.target?.view) set.add(f.target.view);
-    const mv = f.evidence?.matchedViews;
-    if (Array.isArray(mv)) for (const v of mv) if (v in out) set.add(v);
-    for (const v of set) out[v] += 1;
+function summarizeInput(e: EvidencePackageV0, maxN: number) {
+  const prompt = e.rawDigest?.prompt?.preview ?? "";
+  const chunks = e.normalized?.canonical?.promptChunksCanonical ?? [];
+
+  const retrieval = chunks
+    .map((ch: any, i: number) => ({ ...ch, i }))
+    .filter((x: any) => x.source === "retrieval");
+
+  const lines: string[] = [];
+  lines.push(`- User prompt: "${clip(prompt, maxN)}"`);
+
+  if (!retrieval.length) {
+    lines.push(`- Retrieval: 0 chunk(s)`);
+    return lines.join("\n");
   }
-  return out;
+
+  lines.push(`- Retrieval: ${retrieval.length} chunk(s)`);
+  for (const r of retrieval.slice(0, 2)) {
+    lines.push(`  - retrieval#${r.i}: "${clip(r.text ?? "", maxN)}"`);
+  }
+  if (retrieval.length > 2) lines.push(`  - ...`);
+  return lines.join("\n");
 }
 
-function countBySource(findings: any[]): Record<string, number> {
-  const out: Record<string, number> = { prompt: 0 };
-  for (const f of findings) {
-    if (f.target?.field === "prompt") out.prompt += 1;
-    else {
-      const s = f.target?.source ?? "unknown";
-      out[s] = (out[s] ?? 0) + 1;
+function obfuscationHints(e: EvidencePackageV0): string[] {
+  const hints = new Set<string>();
+
+  // sanitizer evidence
+  for (const f of e.findings ?? []) {
+    if (f.kind === "sanitize" && f.scanner === "unicode_sanitizer") {
+      const ev: any = f.evidence ?? {};
+      if ((ev.removedInvisibleCount ?? 0) > 0) hints.add("Invisible/zero-width characters were used.");
+      if ((ev.removedBidiCount ?? 0) > 0) hints.add("Bidi control characters were used (visual spoofing).");
+    }
+    if (f.kind === "sanitize" && f.scanner === "hidden_ascii_tags") {
+      hints.add("Hidden Unicode TAG payload was detected (hidden text channel).");
     }
   }
-  return out;
+
+  // view hints
+  for (const f of e.findings ?? []) {
+    const mv = (f.evidence as any)?.matchedViews;
+    if (Array.isArray(mv)) {
+      if (mv.includes("revealed")) hints.add("Risk pattern appeared only after hidden content was revealed.");
+      if (mv.includes("skeleton")) hints.add("Homoglyph/confusable characters were normalized via skeleton view.");
+    }
+    if (f.target?.view === "revealed") hints.add("Risk pattern matched in revealed view.");
+    if (f.target?.view === "skeleton") hints.add("Risk pattern matched in skeleton view.");
+  }
+
+  return Array.from(hints);
 }
 
-function topN(map: Map<string, number>, n = 5) {
-  return Array.from(map.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, n);
+function whereText(f: any): string {
+  if (f.target?.field === "prompt") return "User prompt";
+  const src = f.target?.source ?? "unknown";
+  const idx = f.target?.chunkIndex ?? -1;
+  return `Chunk (${src}#${idx})`;
 }
 
-function whereOf(f: any): string {
-  if (f.target?.field === "prompt") return `prompt@${f.target.view}`;
-  return `chunk(${f.target.source ?? "unknown"}#${f.target.chunkIndex ?? -1})@${f.target.view}`;
+function shortIssue(e: EvidencePackageV0, maxN: number) {
+  const primary = topDetectFinding(e);
+  if (!primary) return `No detect findings were produced.`;
+
+  const ev: any = primary.evidence ?? {};
+  const category = ev.category ? String(ev.category) : "unknown";
+  const ruleId = ev.ruleId ? String(ev.ruleId) : "unknown";
+  const snip = ev.snippet ? clip(String(ev.snippet), maxN) : "";
+
+  return [
+    `- Primary issue: ${primary.summary}`,
+    `- Location: ${whereText(primary)} (${primary.target?.view ?? "n/a"} view)`,
+    snip ? `- Example: "${snip}"` : undefined,
+    `- Category: ${category}`,
+    `- Rule: ${ruleId}`,
+  ].filter(Boolean).join("\n");
+}
+
+function buildDetails(e: EvidencePackageV0) {
+  const findings = e.findings ?? [];
+  const scanners = (e.scanners ?? []).map((s: any) => `- ${s.name} (${s.kind})`).join("\n") || "- (none)";
+
+  const list = findings.map((f: any) => {
+    const ev: any = f.evidence ?? {};
+    const ruleId = ev.ruleId ? ` ruleId=${ev.ruleId}` : "";
+    const cat = ev.category ? ` category=${ev.category}` : "";
+    const mv = Array.isArray(ev.matchedViews) ? ` matchedViews=[${ev.matchedViews.join(", ")}]` : "";
+    return `- ${f.kind}/${f.scanner} (${f.risk}, score=${f.score}) @ ${f.target?.field}:${f.target?.view}${ruleId}${cat}${mv} — ${f.summary}`;
+  }).join("\n") || "- (none)";
+
+  return `
+<details>
+<summary><strong>Technical details (optional)</strong></summary>
+
+### Scanner chain
+${scanners}
+
+### Findings
+${list}
+
+### Root hash
+- ${e.integrity?.rootHash}
+
+</details>
+`.trim();
 }
 
 export function renderEvidenceReportEN(e: EvidencePackageV0, opts: ReportOptions = {}): string {
-  const maxN = opts.maxPreviewChars ?? 180;
-  const includeIntegrity = opts.includeIntegrityItems ?? true;
-  const includeFindings = opts.includeFindingsList ?? true;
+  const maxN = opts.maxPreviewChars ?? 140;
+  const showDetails = opts.showDetails ?? false;
 
-  const findings = e.findings ?? [];
   const decision = e.decision;
+  const hints = obfuscationHints(e);
+  const hintsText = hints.length ? hints.map(x => `- ${x}`).join("\n") : "- None observed.";
 
-  const byRisk = countByRisk(findings);
-  const byView = countByView(findings);
-  const bySource = countBySource(findings);
+  const report = `# Schnabel Audit Report (Human-friendly)
 
-  // rule/category stats
-  const ruleCounts = new Map<string, number>();
-  const catCounts = new Map<string, number>();
-  for (const f of findings) {
-    const ruleId = f.evidence?.ruleId;
-    const cat = f.evidence?.category;
-    if (typeof ruleId === "string") ruleCounts.set(ruleId, (ruleCounts.get(ruleId) ?? 0) + 1);
-    if (typeof cat === "string") catCounts.set(cat, (catCounts.get(cat) ?? 0) + 1);
-  }
-
-  const topRules = topN(ruleCounts, 5).map(([k, v]) => `- ${k}: ${v}`).join("\n") || "- (none)";
-  const topCats = topN(catCounts, 5).map(([k, v]) => `- ${k}: ${v}`).join("\n") || "- (none)";
-
-  const reasons = (decision?.reasons ?? []).map((r: string, i: number) => `${i + 1}) ${r}`).join("\n") || "_(none)_";
-
-  const chunkCanonical = e.normalized?.canonical?.promptChunksCanonical ?? [];
-  const chunkList = chunkCanonical.length
-    ? chunkCanonical.map((ch: any, i: number) => `- Chunk #${i} (source=${ch.source}): \`${clip(ch.text ?? "", maxN)}\``).join("\n")
-    : "- (none)";
-
-  // include only chunks where view differs materially
-  const vchunks = e.scanned?.views?.chunks ?? [];
-  const viewBlocks: string[] = [];
-  for (let i = 0; i < vchunks.length; i++) {
-    const vc = vchunks[i];
-    const v = vc.views;
-    const diff = v.raw !== v.sanitized || v.sanitized !== v.revealed || v.revealed !== v.skeleton;
-    if (!diff) continue;
-
-    viewBlocks.push(`### Chunk #${i} (source=${vc.source})`);
-    viewBlocks.push(`- raw: \`${clip(v.raw, maxN)}\``);
-    viewBlocks.push(`- sanitized: \`${clip(v.sanitized, maxN)}\``);
-    viewBlocks.push(`- revealed: \`${clip(v.revealed, maxN)}\``);
-    viewBlocks.push(`- skeleton: \`${clip(v.skeleton, maxN)}\``);
-    viewBlocks.push("");
-  }
-  const viewsSection = viewBlocks.length ? viewBlocks.join("\n") : "_(no meaningful view diffs)_";
-
-  const findingsList = includeFindings
-    ? findings.map((f: any) => {
-        const mv = Array.isArray(f.evidence?.matchedViews) ? ` matchedViews=[${f.evidence.matchedViews.join(", ")}]` : "";
-        const rule = f.evidence?.ruleId ? ` ruleId=${f.evidence.ruleId}` : "";
-        const cat = f.evidence?.category ? ` category=${f.evidence.category}` : "";
-        const snip = f.evidence?.snippet ? ` snippet="${clip(f.evidence.snippet, maxN)}"` : "";
-        return `- **${f.kind}/${f.scanner}** (${f.risk}, score=${f.score}) @ ${whereOf(f)}${rule}${cat}${mv}${snip}`;
-      }).join("\n") || "_(none)_"
-    : "_(omitted)_";
-
-  const integrityItems = includeIntegrity
-    ? (e.integrity?.items ?? []).map((it: any) => `- ${it.name}: \`${it.hash}\``).join("\n")
-    : "_(hidden)_";
-
-  return `# Schnabel Audit Summary (Evidence v0)
-
-## A) Run Info
+## Executive Summary
+- Action: \`${decision?.action}\`
+- Risk: \`${decision?.risk}\` (confidence=${decision?.confidence})
 - Request ID: \`${e.requestId}\`
-- Schema: \`${e.schema}\`
-- Generated At (ms): \`${e.generatedAtMs}\`
-- Root Hash (sha256): \`${e.integrity?.rootHash}\`
-- RulePack Version(s): \`${(e.meta?.rulePackVersions ?? ["N/A"]).join(", ")}\`
+- Root hash: \`${e.integrity?.rootHash}\`
 
-## B) Decision
-- action: \`${decision?.action}\`
-- risk: \`${decision?.risk}\`
-- confidence: \`${decision?.confidence}\`
+## Input Summary
+${summarizeInput(e, maxN)}
 
-### Reasons
-${reasons}
+## What went wrong
+${shortIssue(e, maxN)}
 
-## C) Executive Summary
-- totalFindings: **${findings.length}**
-- findingsByRisk: none=${byRisk.none}, low=${byRisk.low}, medium=${byRisk.medium}, high=${byRisk.high}, critical=${byRisk.critical}
-- findingsByView(aggregated): raw=${byView.raw}, sanitized=${byView.sanitized}, revealed=${byView.revealed}, skeleton=${byView.skeleton}
-- findingsBySource: ${Object.entries(bySource).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}=${v}`).join(", ") || "N/A"}
+## Obfuscation / Evasion notes
+${hintsText}
 
-### Top Rule IDs
-${topRules}
+## Recommended next steps
+- Treat **retrieval chunks as untrusted**: drop/ignore suspicious chunks and re-run retrieval if needed.
+- If this is production: log this as a security incident and consider escalating to \`block\` for retrieval-based injection.
+- If the user is legitimate: show a short warning and request confirmation (challenge) before continuing.
 
-### Top Categories
-${topCats}
-
-## D) Input (Provenance)
-### Prompt
-- preview: \`${clip(e.rawDigest?.prompt?.preview ?? "", maxN)}\`
-- length: \`${e.rawDigest?.prompt?.length}\`
-- hash: \`${e.rawDigest?.prompt?.hash}\`
-
-### Chunks (canonical)
-${chunkList}
-
-## E) Multi-View Diffs (Key Observations)
-${viewsSection}
-
-## F) Scanner Chain
-${(e.scanners ?? []).map((s: any)=>`- ${s.name} (${s.kind})`).join("\n") || "_(none)_"}
-
-## G) Findings
-${findingsList}
-
-## H) Integrity Items
-${integrityItems}
 `;
+
+  if (!showDetails) return report;
+  return `${report}\n${buildDetails(e)}\n`;
 }

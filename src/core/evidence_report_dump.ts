@@ -33,6 +33,14 @@ export async function saveEvidenceReportEN(
   const outDir = opts.outDir ?? "artifacts/reports";
   const safeRequestId = safeName(evidence.requestId || "unknown");
   const fileName = opts.fileName ?? `${safeRequestId}.${evidence.generatedAtMs}.report.en.md`;
-  const md = renderEvidenceReportEN(evidence);
+
+  const md = renderEvidenceReportEN(evidence, {
+    maxPreviewChars: 140,
+    showDetails: false, // HUMAN-FRIENDLY default
+  });
+
   return saveEvidenceReportMarkdown(md, { outDir, fileName });
 }
+
+// Compatibility alias (in case old code calls KR)
+export const saveEvidenceReportKR = saveEvidenceReportEN;
