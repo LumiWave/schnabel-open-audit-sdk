@@ -2,6 +2,11 @@ import type { RiskLevel } from "../signals/types.js";
 
 export type VerdictAction = "allow" | "allow_with_warning" | "challenge" | "block";
 
+/**
+ * HistoryTurnV0
+ * - Minimal per-turn record used for multi-turn escalation and contradiction detection.
+ * - Stored by sessionId in a HistoryStore.
+ */
 export interface HistoryTurnV0 {
   requestId: string;
   createdAtMs: number;
@@ -18,6 +23,10 @@ export interface HistoryTurnV0 {
   // Optional: signal digest (rule ids / categories)
   ruleIds?: string[];
   categories?: string[];
+
+  // Detect scanner names / tags (for repetition-based escalation)
+  detectScanners?: string[];
+  detectTags?: string[];
 }
 
 export interface HistoryStore {
@@ -26,8 +35,9 @@ export interface HistoryStore {
 }
 
 /**
- * In-memory history store (good for dev/testing and app-level integration).
- * You can replace this with Redis/DB later without changing scanner logic.
+ * InMemoryHistoryStore
+ * - In-memory session history store (good for dev/testing and simple integrations).
+ * - You can replace this with Redis/DB later without changing scan/policy logic.
  */
 export class InMemoryHistoryStore implements HistoryStore {
   private maxTurns: number;

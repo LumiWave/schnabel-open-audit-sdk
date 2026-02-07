@@ -2,12 +2,27 @@
   "name": "schnabel-open-audit-sdk",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/**",
+    "README.md"
+  ],
   "directories": {
     "test": "test"
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts",
+    "clean": "rm -rf dist",
+    "build": "tsup src/index.ts --format esm,cjs --dts --out-dir dist && node scripts/copy_assets.mjs",
     "test": "vitest",
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "redteam": "tsx examples/red-team/runner.ts"
@@ -15,7 +30,6 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "module",
   "devDependencies": {
     "@types/node": "^25.1.0",
     "tsup": "^8.5.1",

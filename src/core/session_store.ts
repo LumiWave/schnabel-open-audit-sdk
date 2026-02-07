@@ -219,5 +219,7 @@ export async function dumpEvidenceToSessionLayout(
     await fsp.writeFile(summaryPath, md, "utf8");
   }
 
-  return { sessionRoot, turnDir, evidencePath, reportPath, summaryPath };
+  return summaryPath
+    ? { sessionRoot, turnDir, evidencePath, reportPath, summaryPath }
+    : { sessionRoot, turnDir, evidencePath, reportPath };
 }

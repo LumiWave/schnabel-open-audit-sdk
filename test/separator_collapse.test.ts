@@ -21,7 +21,9 @@ describe("SeparatorCollapseScanner", () => {
 
     const { input } = await scanSignals(n, [UnicodeSanitizerScanner, SeparatorCollapseScanner], { mode: "audit" });
 
-    const chunk = input.views!.chunks![1].views.sanitized;
+    expect((input.views?.chunks?.length ?? 0)).toBeGreaterThan(1);
+
+    const chunk = input.views!.chunks![1]!.views.sanitized;
     expect(chunk).toContain("비밀번호");
   });
 

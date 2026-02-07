@@ -42,13 +42,10 @@ export function normalize(req: AuditRequest): NormalizedInput {
     requestId: req.requestId,
     canonical: {
       prompt,
-
-      // Important: pass provenance forward if it exists
-      promptChunksCanonical: chunks && chunks.length ? chunks : undefined,
-
+      ...(chunks && chunks.length ? { promptChunksCanonical: chunks } : {}),
       toolCallsJson: canonicalizeJson(toolCalls),
       toolResultsJson: canonicalizeJson(toolResults),
-      responseText,
+      ...(responseText ? { responseText } : {}),
     },
     features: {
       hasToolCalls: toolCalls.length > 0,

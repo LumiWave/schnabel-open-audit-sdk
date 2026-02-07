@@ -5,13 +5,24 @@ import type { Scanner } from "../scanner.js";
 import type { Finding, RiskLevel } from "../../types.js";
 import type { NormalizedInput } from "../../../normalizer/types.js";
 import { makeFindingId } from "../../util.js";
+import { resolveAssetUrl } from "../../../assets/asset_url.js";
 
 /**
  * We load UTS#39 confusables.txt from the repo asset path.
- * Expected location:
+ * Expected location (source tree):
  *   src/assets/uts39/confusables.txt
+ *
+ * NOTE:
+ * - When bundled (tsup), import.meta.url may point to dist/index.js.
+ * - We therefore try multiple relative paths.
  */
-const CONFUSABLES_URL = new URL("../../../assets/uts39/confusables.txt", import.meta.url);
+const CONFUSABLES_URL = resolveAssetUrl(import.meta.url, [
+  // Source-tree path (when running from TS)
+  "../../../assets/uts39/confusables.txt",
+  // Dist path (when bundled into dist/index.js)
+  "./assets/uts39/confusables.txt",
+  "../assets/uts39/confusables.txt",
+]);
 
 type ConfusablesData = {
   version: string;
@@ -26,7 +37,7 @@ function parseHeaderVersion(lines: string[]): string {
   // # Version: 17.0.0
   for (const line of lines.slice(0, 40)) {
     const m = line.match(/^#\s*Version:\s*([0-9.]+)/i);
-    if (m) return m[1];
+    if (m && m[1]) return m[1];
   }
   return "unknown";
 }
@@ -48,7 +59,7 @@ function loadConfusables(): ConfusablesData {
   if (!fs.existsSync(path)) {
     throw new Error(
       `UTS#39 confusables.txt not found at: ${path}\n` +
-      `Please copy your confusables.txt to: src/assets/uts39/confusables.txt`
+      `Please copy your confusables.txt to: src/assets/uts39/confusables.txt (or dist/assets/uts39/confusables.txt for packaged builds)`
     );
   }
 
@@ -65,11 +76,16 @@ function loadConfusables(): ConfusablesData {
 
     // Format:
     // <src> ; <dst> ; <type> # comment
-    const parts = t.split("#")[0].split(";").map(x => x.trim());
-    if (parts.length < 2) continue;
+    const beforeHash = (t.split("#")[0] ?? "").trim();
+    if (!beforeHash) continue;
 
-    const srcSeq = parseHexSeq(parts[0]);
-    const dstSeq = parseHexSeq(parts[1]);
+    const parts = beforeHash.split(";").map(x => x.trim());
+    const srcRaw = parts[0];
+    const dstRaw = parts[1];
+    if (!srcRaw || !dstRaw) continue;
+
+    const srcSeq = parseHexSeq(srcRaw);
+    const dstSeq = parseHexSeq(dstRaw);
     if (!srcSeq.length || !dstSeq.length) continue;
 
     map.set(keyOf(srcSeq), dstSeq);
@@ -120,7 +136,9 @@ function skeletonize(text: string, data: ConfusablesData): { nfkc: string; skele
     }
 
     if (!matched) {
-      out.push(cps[i]);
+      const cp = cps[i];
+      if (cp == null) break;
+      out.push(cp);
       i += 1;
     }
   }
@@ -172,16 +190,16 @@ export const Uts39ConfusablesScanner: Scanner = {
       if (risk === "none") return;
 
       findings.push({
-        id: makeFindingId(this.name, requestId, key),
-        kind: this.kind,
-        scanner: this.name,
+        id: makeFindingId("uts39_confusables", requestId, key),
+        kind: "detect",
+        scanner: "uts39_confusables",
         score,
         risk,
         tags: ["uts39", "confusables", mixed ? "mixed_script" : "skeleton_changed"],
         summary: mixed
           ? "Mixed-script text detected (potential homograph attack)."
           : "UTS#39 skeleton differs from NFKC text (potential confusable characters).",
-        target,
+        target: target as any,
         evidence: {
           uts39Version: data.version,
           replacedMappings: replaced,
@@ -194,21 +212,21 @@ export const Uts39ConfusablesScanner: Scanner = {
     };
 
     // 1) Prompt
-    check(input.canonical.prompt, { field: "prompt" }, input.requestId, "prompt");
+    check(input.canonical.prompt, { field: "prompt" } as any, input.requestId, "prompt");
 
     // 2) Provenance chunks
     const chunks = input.canonical.promptChunksCanonical ?? [];
     for (let i = 0; i < chunks.length; i++) {
       const ch = chunks[i];
+      if (!ch) continue;
       check(
         ch.text,
-        { field: "promptChunk", source: ch.source, chunkIndex: i },
+        { field: "promptChunk", source: ch.source, chunkIndex: i } as any,
         input.requestId,
         `chunk:${i}:${ch.source}`
       );
     }
 
-    // This scanner does not mutate input; it only emits findings.
     return { input, findings };
   },
 };

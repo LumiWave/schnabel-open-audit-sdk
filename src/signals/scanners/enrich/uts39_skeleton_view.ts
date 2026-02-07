@@ -4,12 +4,19 @@ import { fileURLToPath } from "node:url";
 import type { Scanner } from "../scanner.js";
 import type { NormalizedInput } from "../../../normalizer/types.js";
 import { ensureViews } from "../../views.js";
+import { resolveAssetUrl } from "../../../assets/asset_url.js";
 
 /**
  * UTS#39 confusables.txt location in this repo:
  *   src/assets/uts39/confusables.txt
  */
-const CONFUSABLES_URL = new URL("../../../assets/uts39/confusables.txt", import.meta.url);
+const CONFUSABLES_URL = resolveAssetUrl(import.meta.url, [
+  // Source-tree path (when running from TS)
+  "../../../assets/uts39/confusables.txt",
+  // Dist path (when bundled into dist/index.js)
+  "./assets/uts39/confusables.txt",
+  "../assets/uts39/confusables.txt",
+]);
 
 type ConfusablesData = {
   version: string;
@@ -22,7 +29,7 @@ let CACHE: ConfusablesData | null = null;
 function parseHeaderVersion(lines: string[]): string {
   for (const line of lines.slice(0, 50)) {
     const m = line.match(/^#\s*Version:\s*([0-9.]+)/i);
-    if (m) return m[1];
+    if (m && m[1]) return m[1];
   }
   return "unknown";
 }
@@ -42,7 +49,7 @@ function loadConfusables(): ConfusablesData {
   if (!fs.existsSync(path)) {
     throw new Error(
       `UTS#39 confusables.txt not found at: ${path}\n` +
-      `Please place it at: src/assets/uts39/confusables.txt`
+      `Please place it at: src/assets/uts39/confusables.txt (or copy assets into dist/assets for packaged builds)`
     );
   }
 
@@ -58,11 +65,16 @@ function loadConfusables(): ConfusablesData {
     if (!t || t.startsWith("#")) continue;
 
     // Format: <src> ; <dst> ; <type> # comment
-    const parts = t.split("#")[0].split(";").map(x => x.trim());
-    if (parts.length < 2) continue;
+    const beforeHash = (t.split("#")[0] ?? "").trim();
+    if (!beforeHash) continue;
 
-    const srcSeq = parseHexSeq(parts[0]);
-    const dstSeq = parseHexSeq(parts[1]);
+    const parts = beforeHash.split(";").map(x => x.trim());
+    const srcRaw = parts[0];
+    const dstRaw = parts[1];
+    if (!srcRaw || !dstRaw) continue;
+
+    const srcSeq = parseHexSeq(srcRaw);
+    const dstSeq = parseHexSeq(dstRaw);
     if (!srcSeq.length || !dstSeq.length) continue;
 
     map.set(keyOf(srcSeq), dstSeq);
@@ -115,7 +127,9 @@ function skeletonize(text: string, data: ConfusablesData): string {
     }
 
     if (!matched) {
-      out.push(cps[i]);
+      const cp = cps[i];
+      if (cp == null) break;
+      out.push(cp);
       i += 1;
     }
   }
@@ -138,16 +152,15 @@ export const Uts39SkeletonViewScanner: Scanner = {
     const data = loadConfusables();
 
     // Prompt skeleton from revealed
-    const promptSkeleton = skeletonize(views.prompt.revealed, data);
-    views.prompt.skeleton = promptSkeleton;
+    views.prompt.skeleton = skeletonize(views.prompt.revealed, data);
 
     // Chunk skeletons
     const chunks = views.chunks ?? [];
     for (const ch of chunks) {
+      if (!ch) continue;
       ch.views.skeleton = skeletonize(ch.views.revealed, data);
     }
 
-    // No findings (pure enrichment)
     return { input: { ...base, views }, findings: [] };
   },
 };
