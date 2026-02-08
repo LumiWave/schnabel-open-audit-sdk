@@ -5,3 +5,4 @@ dist/
 # Repomix output file ignore
 repomix-output.xml
 artifacts/
+*.Zone.Identifier
