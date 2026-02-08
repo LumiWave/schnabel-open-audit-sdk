@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import type { Scanner } from "../scanner.js";
 import type { Finding } from "../../types.js";
@@ -8,16 +8,9 @@ import type { NormalizedInput, TextView } from "../../../normalizer/types.js";
 import { makeFindingId } from "../../util.js";
 import { ensureViews, VIEW_SCAN_ORDER, pickPreferredView } from "../../views.js";
 import { loadRulePackFromUrl, type CompiledRulePack, type CompiledRule } from "../../rules/rulepack.js";
-import { resolveAssetUrl } from "../../../assets/asset_url.js";
+import { resolveAssetPath } from "../../../core/asset_path.js";
 
-// Default rulepack asset resolution (works in both source-tree and bundled dist builds)
-const DEFAULT_PACK_URL = resolveAssetUrl(import.meta.url, [
-  // Source-tree path (when running from TS)
-  "../../../assets/rules/default.rulepack.json",
-  // Dist path (when bundled into dist/index.js)
-  "./assets/rules/default.rulepack.json",
-  "../assets/rules/default.rulepack.json",
-]);
+const DEFAULT_PACK_URL = pathToFileURL(resolveAssetPath("rules/default.rulepack.json", import.meta.url));
 
 export interface RulePackScannerOptions {
   packUrl?: URL;
@@ -99,10 +92,7 @@ export function createRulePackScanner(opts: RulePackScannerOptions = {}): Scanne
     watcher = null;
   };
 
-  const matchInText = (
-    rule: CompiledRule,
-    text: string
-  ): { hit: boolean; index?: number; match?: string; negated?: boolean } => {
+  const matchInText = (rule: CompiledRule, text: string): { hit: boolean; index?: number; match?: string; negated?: boolean } => {
     // Positive match
     if (rule.patternType === "keyword") {
       const hay = text.toLowerCase();
@@ -123,10 +113,7 @@ export function createRulePackScanner(opts: RulePackScannerOptions = {}): Scanne
     return { hit: true, index: m.index, match: m[0] };
   };
 
-  const matchAcrossViews = (
-    rule: CompiledRule,
-    viewMap: { raw: string; sanitized: string; revealed: string; skeleton: string }
-  ) => {
+    const matchAcrossViews = (rule, viewMap: { raw: string; sanitized: string; revealed: string; skeleton: string }) => {
     const matchedViews: TextView[] = [];
     const details: Record<string, MatchDetail> = {};
 
@@ -160,7 +147,7 @@ export function createRulePackScanner(opts: RulePackScannerOptions = {}): Scanne
       for (const rule of rules) {
         if (!rule._scopes.includes("prompt")) continue;
 
-        const hit = matchAcrossViews(rule, base.views!.prompt as any);
+        const hit = matchAcrossViews(rule, base.views!.prompt);
         if (!hit) continue;
 
         const view = hit.preferred;
@@ -175,7 +162,7 @@ export function createRulePackScanner(opts: RulePackScannerOptions = {}): Scanne
           risk: rule.risk,
           tags: rule.tags ?? [rule.category],
           summary: rule.summary ?? `Rule matched: ${rule.id}`,
-          target: { field: "prompt", view } as any,
+          target: { field: "prompt", view },
           evidence: {
             ruleId: rule.id,
             category: rule.category,
@@ -191,13 +178,12 @@ export function createRulePackScanner(opts: RulePackScannerOptions = {}): Scanne
       const chunks = base.views!.chunks ?? [];
       for (let i = 0; i < chunks.length; i++) {
         const ch = chunks[i];
-        if (!ch) continue;
 
         for (const rule of rules) {
           if (!rule._scopes.includes("chunks")) continue;
           if (rule._sources && !rule._sources.has(ch.source)) continue;
 
-          const hit = matchAcrossViews(rule, ch.views as any);
+          const hit = matchAcrossViews(rule, ch.views);
           if (!hit) continue;
 
           const view = hit.preferred;
@@ -212,7 +198,7 @@ export function createRulePackScanner(opts: RulePackScannerOptions = {}): Scanne
             risk: rule.risk,
             tags: rule.tags ?? [rule.category],
             summary: rule.summary ?? `Rule matched: ${rule.id}`,
-            target: { field: "promptChunk", view, source: ch.source, chunkIndex: i } as any,
+            target: { field: "promptChunk", view, source: ch.source, chunkIndex: i },
             evidence: {
               ruleId: rule.id,
               category: rule.category,

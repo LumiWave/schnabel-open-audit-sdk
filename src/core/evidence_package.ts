@@ -126,32 +126,23 @@ export function buildEvidencePackageV0(args: {
   const rawPrompt = req.prompt ?? "";
   const rawChunks = req.promptChunks ?? [];
 
-  const promptPrev = opts.includeRawPreviews ? previewText(rawPrompt, opts.previewChars) : undefined;
-  const promptDigest = {
-    hash: sha256Hex(rawPrompt),
-    length: rawPrompt.length,
-    ...(promptPrev ? { preview: promptPrev } : {}),
-  };
-
-  const chunkDigests = rawChunks.length
-    ? rawChunks.map(ch => {
-        const text = (ch.text ?? "").toString();
-        const prev = opts.includeRawPreviews ? previewText(text, opts.previewChars) : undefined;
-        return {
-          source: String(ch.source),
-          hash: sha256Hex(text),
-          length: text.length,
-          ...(prev ? { preview: prev } : {}),
-        };
-      })
-    : undefined;
-
   const rawDigest: EvidencePackageV0["rawDigest"] = {
-    prompt: promptDigest,
-    ...(chunkDigests ? { promptChunks: chunkDigests } : {}),
-    ...(req.toolCalls ? { toolCallsHash: hashOf(req.toolCalls) } : {}),
-    ...(req.toolResults ? { toolResultsHash: hashOf(req.toolResults) } : {}),
-    ...(req.responseText ? { responseTextHash: sha256Hex(req.responseText) } : {}),
+    prompt: {
+      hash: sha256Hex(rawPrompt),
+      preview: opts.includeRawPreviews ? previewText(rawPrompt, opts.previewChars) : undefined,
+      length: rawPrompt.length,
+    },
+    promptChunks: rawChunks.length
+      ? rawChunks.map(ch => ({
+          source: String(ch.source),
+          hash: sha256Hex(ch.text ?? ""),
+          preview: opts.includeRawPreviews ? previewText(ch.text ?? "", opts.previewChars) : undefined,
+          length: (ch.text ?? "").length,
+        }))
+      : undefined,
+    toolCallsHash: req.toolCalls ? hashOf(req.toolCalls) : undefined,
+    toolResultsHash: req.toolResults ? hashOf(req.toolResults) : undefined,
+    responseTextHash: req.responseText ? sha256Hex(req.responseText) : undefined,
   };
 
   const scannerMeta = scanners.map(s => ({ name: s.name, kind: s.kind }));
@@ -170,23 +161,18 @@ export function buildEvidencePackageV0(args: {
 
   const rootHash = computeHashChain(items);
 
-  const rulePackVersions = extractRulePackVersions(findings);
-
   return {
     schema: "schnabel-evidence-v0",
     requestId: req.requestId,
     generatedAtMs: Date.now(),
     request: {
       timestamp: req.timestamp,
-      ...(req.actor ? { actor: req.actor } : {}),
-      ...(req.model ? { model: req.model } : {}),
+      actor: req.actor,
+      model: req.model,
     },
     rawDigest,
     normalized: { canonical: normalized.canonical },
-    scanned: {
-      canonical: scanned.canonical,
-      ...(scanned.views ? { views: scanned.views } : {}),
-    },
+    scanned: { canonical: scanned.canonical, views: scanned.views },
     scanners: scannerMeta,
     findings,
     decision,
@@ -196,7 +182,7 @@ export function buildEvidencePackageV0(args: {
       rootHash,
     },
     meta: {
-      ...(rulePackVersions ? { rulePackVersions } : {}),
+      rulePackVersions: extractRulePackVersions(findings),
     },
   };
 }

@@ -2,7 +2,30 @@
   "name": "schnabel-open-audit-sdk",
   "version": "1.0.0",
   "description": "",
+  "main": "./dist/index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "build": "npm run clean && tsup src/index.ts --format esm,cjs --dts && node scripts/copy-assets.mjs",
+    "test": "vitest",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "redteam": "tsx examples/red-team/runner.ts",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prepack": "npm run build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
   "type": "module",
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -10,31 +33,7 @@
       "require": "./dist/index.cjs"
     }
   },
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "files": [
-    "dist/**",
-    "README.md"
-  ],
-  "directories": {
-    "test": "test"
-  },
-  "scripts": {
-    "clean": "rm -rf dist",
-    "build": "tsup src/index.ts --format esm,cjs --dts --out-dir dist && node scripts/copy_assets.mjs",
-    "test": "vitest",
-    "typecheck": "tsc -p tsconfig.test.json --noEmit",
-    "redteam": "tsx examples/red-team/runner.ts"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "devDependencies": {
-    "@types/node": "^25.1.0",
-    "tsup": "^8.5.1",
-    "tsx": "^4.21.0",
-    "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
-  }
+    "dist"
+  ]
 }

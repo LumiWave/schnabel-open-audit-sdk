@@ -13,10 +13,10 @@ function toJsonSafe(value: unknown, seen: WeakSet<object>): JsonSafe {
 
   if (t === "string" || t === "number" || t === "boolean") return value as any;
 
-  if (typeof value === "bigint") return value.toString();
-  if (typeof value === "undefined") return null;
-  if (typeof value === "function") return "[Function]";
-  if (typeof value === "symbol") return value.toString();
+  if (t === "bigint") return value.toString();
+  if (t === "undefined") return null;
+  if (t === "function") return "[Function]";
+  if (t === "symbol") return value.toString();
 
   if (Array.isArray(value)) {
     return value.map(v => toJsonSafe(v, seen));

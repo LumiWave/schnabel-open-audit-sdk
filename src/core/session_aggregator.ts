@@ -78,7 +78,7 @@ function countBySource(findings: Finding[]): Record<string, number> {
 
   for (const f of findings) {
     if (f.target.field === "prompt") {
-      out["prompt"] = (out["prompt"] ?? 0) + 1;
+      out.prompt += 1;
     } else {
       const s = f.target.source ?? "unknown";
       out[s] = (out[s] ?? 0) + 1;
@@ -154,10 +154,7 @@ export class SessionAggregator {
     this.findingsTotal += findings.length;
 
     for (const v of Object.keys(byView) as TextView[]) this.findingsByView[v] += byView[v];
-    for (const k of Object.keys(bySource)) {
-      const v = bySource[k] ?? 0;
-      this.findingsBySource[k] = (this.findingsBySource[k] ?? 0) + v;
-    }
+    for (const k of Object.keys(bySource)) this.findingsBySource[k] = (this.findingsBySource[k] ?? 0) + bySource[k];
 
     const { ruleCounts, catCounts } = extractRuleAndCategoryCounts(findings);
     for (const [k, c] of ruleCounts.entries()) this.ruleCounts.set(k, (this.ruleCounts.get(k) ?? 0) + c);
@@ -178,8 +175,8 @@ export class SessionAggregator {
       bySource,
       topRules,
       topCategories,
-      ...(args.evidenceFilePath ? { evidenceFilePath: args.evidenceFilePath } : {}),
-      ...(args.reportFilePath ? { reportFilePath: args.reportFilePath } : {}),
+      evidenceFilePath: args.evidenceFilePath,
+      reportFilePath: args.reportFilePath,
     });
   }
 

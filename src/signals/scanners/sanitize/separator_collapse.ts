@@ -122,7 +122,6 @@ export const SeparatorCollapseScanner: Scanner = {
     const chunkViews = base.views!.chunks ?? [];
     for (let i = 0; i < chunkViews.length; i++) {
       const cv = chunkViews[i];
-      if (!cv) continue;
       const v = cv.views;
 
       const s1 = collapseSeparators(v.sanitized);
@@ -179,7 +178,7 @@ export const SeparatorCollapseScanner: Scanner = {
         canonical: {
           ...base.canonical,
           prompt: promptCollapsed,
-          ...(updatedChunks ? { promptChunksCanonical: updatedChunks } : {}),
+          promptChunksCanonical: updatedChunks,
         },
         features: {
           ...base.features,

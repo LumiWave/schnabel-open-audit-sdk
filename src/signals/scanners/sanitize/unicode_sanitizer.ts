@@ -112,21 +112,18 @@ export const UnicodeSanitizerScanner: Scanner = {
     }
 
     for (let i = 0; i < chunks.length; i++) {
-      const ch = chunks[i];
-      if (!ch) continue;
-
-      const res = sanitizeText(ch.text);
+      const res = sanitizeText(chunks[i].text);
       const rr = riskFrom(res.stats);
       if (res.stats.changed && rr.risk !== "none") {
         findings.push({
-          id: makeFindingId(this.name, base.requestId, `chunk:${i}:${ch.source}`),
+          id: makeFindingId(this.name, base.requestId, `chunk:${i}:${chunks[i].source}`),
           kind: this.kind,
           scanner: this.name,
           score: rr.score,
           risk: rr.risk,
           tags: ["unicode", "sanitization", "obfuscation"],
           summary: "Unicode sanitization applied to chunk (NFKC / zero-width / bidi).",
-          target: { field: "promptChunk", view: "sanitized", source: ch.source, chunkIndex: i },
+          target: { field: "promptChunk", view: "sanitized", source: chunks[i].source, chunkIndex: i },
           evidence: res.stats,
         });
       }
@@ -139,7 +136,7 @@ export const UnicodeSanitizerScanner: Scanner = {
       canonical: {
         ...base.canonical,
         prompt: views.prompt.sanitized,
-        ...(outChunks.length ? { promptChunksCanonical: outChunks } : {}),
+        promptChunksCanonical: outChunks.length ? outChunks : undefined,
       },
       features: {
         ...base.features,

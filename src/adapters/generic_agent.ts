@@ -89,31 +89,31 @@ function buildPromptChunks(e: AgentIngressEvent): SourcedText[] | undefined {
  * - Passes toolCalls/toolResults through without mutation
  */
 export function fromAgentIngressEvent(e: AgentIngressEvent): AuditRequest {
-  const promptChunks = buildPromptChunks(e);
-
-  // Always keep metadata object (optional field). Avoid writing optional fields as `undefined`.
-  const metadata = {
-    ...(e.metadata ?? {}),
-    retrievalDocsMeta: (e.retrievalDocs ?? []).map(d => ({
-      docId: d.docId,
-      url: d.url,
-      score: d.score,
-    })),
-  };
-
-  // With `exactOptionalPropertyTypes: true`, optional fields must be omitted when undefined.
-  const out: AuditRequest = {
+  return {
     requestId: e.requestId,
     timestamp: e.timestamp,
-    prompt: e.userPrompt,
-    metadata,
-    ...(e.actor ? { actor: e.actor } : {}),
-    ...(e.model ? { model: e.model } : {}),
-    ...(promptChunks ? { promptChunks } : {}),
-    ...(e.toolCalls ? { toolCalls: e.toolCalls } : {}),
-    ...(e.toolResults ? { toolResults: e.toolResults } : {}),
-    ...(typeof e.responseText === "string" ? { responseText: e.responseText } : {}),
-  };
+    actor: e.actor,
+    model: e.model,
 
-  return out;
+    // Compat prompt: keep the user's raw prompt string.
+    prompt: e.userPrompt,
+
+    // Provenance-preserving chunks: system/developer/user/retrieval separated.
+    promptChunks: buildPromptChunks(e),
+
+    toolCalls: e.toolCalls,
+    toolResults: e.toolResults,
+
+    responseText: e.responseText,
+
+    // Keep upstream metadata. Put retrieval doc meta here (not the full text).
+    metadata: {
+      ...(e.metadata ?? {}),
+      retrievalDocsMeta: (e.retrievalDocs ?? []).map(d => ({
+        docId: d.docId,
+        url: d.url,
+        score: d.score,
+      })),
+    },
+  };
 }

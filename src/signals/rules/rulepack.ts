@@ -76,10 +76,10 @@ function perfGuardRegex(ruleId: string, pattern: string, label: "pattern" | "neg
 }
 
 function normalizeScopes(scopes?: RuleScope[]): RuleScope[] {
-  const s: RuleScope[] = (scopes && scopes.length) ? scopes : ["prompt", "chunks"];
-  const uniq: RuleScope[] = Array.from(new Set<RuleScope>(s));
+  const s = scopes && scopes.length ? scopes : ["prompt", "chunks"];
+  const uniq = Array.from(new Set(s));
   // keep stable ordering
-  return uniq.sort() as RuleScope[];
+  return uniq.sort();
 }
 
 function normalizeFlags(flags?: string): string {

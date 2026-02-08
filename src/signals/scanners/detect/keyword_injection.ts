@@ -81,7 +81,6 @@ export const KeywordInjectionScanner: Scanner = {
     const chunks = views.chunks ?? [];
     for (let i = 0; i < chunks.length; i++) {
       const ch = chunks[i];
-      if (!ch) continue;
       const viewMap = ch.views as any;
 
       for (const p of PATTERNS) {
