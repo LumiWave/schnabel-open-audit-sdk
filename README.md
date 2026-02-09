@@ -23,6 +23,7 @@ Evidence-first • Provenance-aware • Obfuscation-resistant
 - [Install and quick start](#install-and-quick-start)
 - [Integration points: Pre-LLM, Tool-boundary, Post-LLM](#integration-points-when-to-run-which-chain)
 - [Response Audit (LLM output scanning)](#response-audit-llm-output-scanning)
+- [Writing custom scanners](#writing-custom-scanners)
 - [Example: Usage with CloudBot](#example-usage-with-cloudbot)
 - [Example: Anthropic computer-use-demo (official Git source)](#example-anthropic-computer-use-demo-official-git-source)
 - [Usage and integration](#usage-and-integration)
@@ -264,6 +265,114 @@ console.log(result.decision.action);
 ```
 
 Add the rule to `src/assets/rules/default.rulepack.json`, then run `npm run build` to update `dist`.
+
+### Writing custom scanners
+
+The SDK exposes a `Scanner` interface and helper utilities so you can write your own scanners and plug them into the chain. A scanner is an object with `name`, `kind`, and an async `run()` method.
+
+**Scanner kinds:**
+
+| Kind | Purpose | Mutates input? |
+|------|---------|---------------|
+| `sanitize` | Normalize/clean text views | Yes (views + canonical) |
+| `enrich` | Add derived views | Yes (views only) |
+| `detect` | Find suspicious signals | No (typically) |
+
+**Quick start with `defineScanner`:**
+
+```ts
+import {
+  defineScanner,
+  ensureViews,
+  makeFindingId,
+  VIEW_SCAN_ORDER,
+  pickPreferredView,
+  createPreLLMScannerChain,
+  runAudit,
+} from "schnabel-open-audit-sdk";
+
+// 1. Define a custom detect scanner
+const PhoneNumberScanner = defineScanner({
+  name: "phone_number_detector",
+  kind: "detect",
+  async run(input, ctx) {
+    const base = ensureViews(input);
+    const views = base.views!;
+    const findings = [];
+
+    // Scan prompt views
+    const re = /\b\d{3}[-.]?\d{3,4}[-.]?\d{4}\b/g;
+    const matchedViews = [];
+    for (const v of VIEW_SCAN_ORDER) {
+      if (re.test(views.prompt[v])) matchedViews.push(v);
+      re.lastIndex = 0;
+    }
+
+    if (matchedViews.length) {
+      findings.push({
+        id: makeFindingId("phone_number_detector", base.requestId, "prompt"),
+        kind: "detect",
+        scanner: "phone_number_detector",
+        score: 0.7,
+        risk: "medium",
+        tags: ["pii", "phone_number"],
+        summary: "Phone number pattern detected in prompt.",
+        target: { field: "prompt", view: pickPreferredView(matchedViews) },
+        evidence: { matchedViews },
+      });
+    }
+
+    return { input: base, findings };
+  },
+});
+
+// 2. Add to the scanner chain
+const scanners = [...createPreLLMScannerChain(), PhoneNumberScanner];
+const result = await runAudit(req, { scanners });
+```
+
+**You can also implement `Scanner` directly** (without `defineScanner`):
+
+```ts
+import type { Scanner } from "schnabel-open-audit-sdk";
+
+export const MyScanner: Scanner = {
+  name: "my_scanner",
+  kind: "detect",
+  async run(input, ctx) {
+    // ... your logic ...
+    return { input, findings: [] };
+  },
+};
+```
+
+**Factory pattern** for scanners that need configuration or state:
+
+```ts
+import type { Scanner } from "schnabel-open-audit-sdk";
+
+export function createMyScanner(options: { threshold: number }): Scanner {
+  return {
+    name: "my_scanner",
+    kind: "detect",
+    async run(input, ctx) {
+      // Use options.threshold in detection logic
+      return { input, findings: [] };
+    },
+  };
+}
+```
+
+**Available helpers:**
+
+| Export | Purpose |
+|--------|---------|
+| `defineScanner(opts)` | Create a scanner with runtime validation |
+| `ensureViews(input)` | Initialize multi-view representation (call at start of `run`) |
+| `makeFindingId(scanner, requestId, key)` | Generate deterministic finding IDs |
+| `VIEW_SCAN_ORDER` | `["raw", "sanitized", "revealed", "skeleton"]` — order for scanning |
+| `pickPreferredView(matchedViews)` | Pick the best view from matches for human-readable output |
+| `initViewSet(text)` | Create a `TextViewSet` from a string (for sanitizer/enricher authors) |
 
 ### Example: Usage with CloudBot
 

@@ -6,7 +6,7 @@ export const VIEW_SCAN_ORDER: TextView[] = ["raw", "sanitized", "revealed", "ske
 // Prefer human-readable views first; skeleton is a fallback for confusables
 export const VIEW_PREFERENCE: TextView[] = ["revealed", "sanitized", "raw", "skeleton"];
 
-function initViewSet(text: string): TextViewSet {
+export function initViewSet(text: string): TextViewSet {
   return {
     raw: text,
     sanitized: text,
