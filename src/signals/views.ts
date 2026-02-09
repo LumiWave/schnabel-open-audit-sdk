@@ -25,11 +25,13 @@ export function ensureViews(input: NormalizedInput): NormalizedInput {
   if (input.views) return input;
 
   const chunks = input.canonical.promptChunksCanonical ?? [];
+  const responseText = input.canonical.responseText;
   const views: InputViews = {
     prompt: initViewSet(input.canonical.prompt),
     ...(chunks.length
       ? { chunks: chunks.map(ch => ({ source: ch.source, views: initViewSet(ch.text) })) }
       : {}),
+    ...(responseText ? { response: initViewSet(responseText) } : {}),
   };
 
   return { ...input, views };

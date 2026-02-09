@@ -4,7 +4,7 @@ export type RiskLevel = "none" | "low" | "medium" | "high" | "critical";
 export type ScannerKind = "sanitize" | "detect" | "enrich";
 
 export interface FindingTarget {
-  field: "prompt" | "promptChunk";
+  field: "prompt" | "promptChunk" | "response";
   view: TextView;            // NEW: raw/sanitized/revealed
   source?: InputSource;
   chunkIndex?: number;

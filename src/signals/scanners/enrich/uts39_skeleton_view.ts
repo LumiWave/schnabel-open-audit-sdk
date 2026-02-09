@@ -156,6 +156,11 @@ export const Uts39SkeletonViewScanner: Scanner = {
       ch.views.skeleton = skeletonize(ch.views.revealed, data);
     }
 
+    // Response skeleton
+    if (views.response) {
+      views.response.skeleton = skeletonize(views.response.revealed, data);
+    }
+
     // No findings (pure enrichment)
     return { input: { ...base, views }, findings: [] };
   },

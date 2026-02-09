@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { InputSource } from "../../normalizer/types.js";
 import type { RiskLevel } from "../types.js";
 
-export type RuleScope = "prompt" | "chunks";
+export type RuleScope = "prompt" | "chunks" | "response";
 export type PatternType = "regex" | "keyword";
 
 export interface RuleSpec {
@@ -127,7 +127,7 @@ function validateRule(rule: RuleSpec): void {
 
   if (rule.scopes) {
     for (const sc of rule.scopes) {
-      if (sc !== "prompt" && sc !== "chunks") {
+      if (sc !== "prompt" && sc !== "chunks" && sc !== "response") {
         throw new Error(`RulePack: invalid scope "${sc}" for ${rule.id}`);
       }
     }

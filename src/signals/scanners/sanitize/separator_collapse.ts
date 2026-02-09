@@ -160,10 +160,49 @@ export const SeparatorCollapseScanner: Scanner = {
       }
     }
 
-    // 3) Optionally update canonical fields to match revealed text
+    // 3) Response views
+    if (base.views!.response) {
+      const v = base.views!.response;
+      const s1 = collapseSeparators(v.sanitized);
+      const s2 = collapseSeparators(v.revealed);
+
+      if (s1.stats.changed || s2.stats.changed) {
+        anyChanged = true;
+        v.sanitized = s1.text;
+        v.revealed = s2.text;
+
+        const rs = riskScore({
+          removedBetween: s1.stats.removedBetween + s2.stats.removedBetween,
+          removedLeading: s1.stats.removedLeading + s2.stats.removedLeading,
+          removedTrailing: s1.stats.removedTrailing + s2.stats.removedTrailing,
+          changed: true,
+        });
+
+        if (rs.risk !== "none") {
+          findings.push({
+            id: makeFindingId(this.name, base.requestId, "response"),
+            kind: this.kind,
+            scanner: this.name,
+            score: rs.score,
+            risk: rs.risk,
+            tags: ["obfuscation", "separator_collapse"],
+            summary: "Collapsed separator-based obfuscation in response (e.g., dots/pipes between letters).",
+            target: { field: "response", view: "sanitized" },
+            evidence: {
+              removedBetween: s1.stats.removedBetween + s2.stats.removedBetween,
+              removedLeading: s1.stats.removedLeading + s2.stats.removedLeading,
+              removedTrailing: s1.stats.removedTrailing + s2.stats.removedTrailing,
+            },
+          });
+        }
+      }
+    }
+
+    // 4) Optionally update canonical fields to match revealed text
     // This helps any detector that still uses canonical instead of views.
     if (anyChanged) {
       const promptCollapsed = base.views!.prompt.revealed;
+      const responseCollapsed = base.views!.response?.revealed;
 
       const canonicalChunks = base.canonical.promptChunksCanonical ?? [];
       const updatedChunks = canonicalChunks.length
@@ -180,6 +219,7 @@ export const SeparatorCollapseScanner: Scanner = {
           ...base.canonical,
           prompt: promptCollapsed,
           ...(updatedChunks !== undefined && updatedChunks.length > 0 ? { promptChunksCanonical: updatedChunks } : {}),
+          ...(responseCollapsed !== undefined && responseCollapsed !== base.canonical.responseText ? { responseText: responseCollapsed } : {}),
         },
         features: {
           ...base.features,

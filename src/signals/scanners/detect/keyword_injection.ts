@@ -106,6 +106,30 @@ export const KeywordInjectionScanner: Scanner = {
       }
     }
 
+    // 3) Response
+    if (views.response) {
+      for (const p of PATTERNS) {
+        const matchedViews = matchViews(p.re, views.response);
+        if (!matchedViews.length) continue;
+
+        const view = pickPreferredView(matchedViews);
+        findings.push({
+          id: makeFindingId(this.name, base.requestId, `${p.key}:response`),
+          kind: this.kind,
+          scanner: this.name,
+          score: p.score,
+          risk: p.risk,
+          tags: p.tags,
+          summary: p.summary,
+          target: { field: "response", view },
+          evidence: {
+            pattern: p.key,
+            matchedViews,
+          },
+        });
+      }
+    }
+
     return { input: base, findings };
   },
 };

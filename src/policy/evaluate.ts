@@ -112,7 +112,9 @@ export function evaluatePolicy(
     const where =
   f.target.field === "prompt"
     ? `prompt@${f.target.view}`
-    : `chunk(${f.target.source ?? "unknown"}#${f.target.chunkIndex ?? -1})@${f.target.view}`;
+    : f.target.field === "response"
+      ? `response@${f.target.view}`
+      : `chunk(${f.target.source ?? "unknown"}#${f.target.chunkIndex ?? -1})@${f.target.view}`;
 
 
     return `[${f.risk.toUpperCase()}|${f.scanner}] ${where}: ${f.summary}`;

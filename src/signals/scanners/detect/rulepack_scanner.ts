@@ -213,6 +213,40 @@ export function createRulePackScanner(opts: RulePackScannerOptions = {}): Scanne
         }
       }
 
+      // Response rules
+      if (base.views!.response) {
+        for (const rule of rules) {
+          if (!rule._scopes.includes("response")) continue;
+
+          const hit = matchAcrossViews(rule, base.views!.response);
+          if (!hit) continue;
+
+          const view = hit.preferred;
+          const responseViews = base.views!.response;
+          const text = responseViews[view as keyof typeof responseViews] ?? "";
+          const idx = hit.detail?.index ?? -1;
+
+          findings.push({
+            id: makeFindingId(scannerName, base.requestId, `${rule.id}:response:${view}`),
+            kind: "detect",
+            scanner: scannerName,
+            score: rule.score,
+            risk: rule.risk,
+            tags: rule.tags ?? [rule.category],
+            summary: rule.summary ?? `Rule matched: ${rule.id}`,
+            target: { field: "response", view },
+            evidence: {
+              ruleId: rule.id,
+              category: rule.category,
+              patternType: rule.patternType,
+              rulePackVersion: version,
+              matchedViews: hit.matchedViews,
+              snippet: idx >= 0 ? snippet(text, idx) : undefined,
+            },
+          });
+        }
+      }
+
       return { input: base, findings };
     },
   };
