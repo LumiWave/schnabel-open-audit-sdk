@@ -6,7 +6,7 @@ export const VIEW_SCAN_ORDER: TextView[] = ["raw", "sanitized", "revealed", "ske
 // Prefer human-readable views first; skeleton is a fallback for confusables
 export const VIEW_PREFERENCE: TextView[] = ["revealed", "sanitized", "raw", "skeleton"];
 
-function initViewSet(text: string): TextViewSet {
+export function initViewSet(text: string): TextViewSet {
   return {
     raw: text,
     sanitized: text,
@@ -25,11 +25,13 @@ export function ensureViews(input: NormalizedInput): NormalizedInput {
   if (input.views) return input;
 
   const chunks = input.canonical.promptChunksCanonical ?? [];
+  const responseText = input.canonical.responseText;
   const views: InputViews = {
     prompt: initViewSet(input.canonical.prompt),
     ...(chunks.length
       ? { chunks: chunks.map(ch => ({ source: ch.source, views: initViewSet(ch.text) })) }
       : {}),
+    ...(responseText ? { response: initViewSet(responseText) } : {}),
   };
 
   return { ...input, views };

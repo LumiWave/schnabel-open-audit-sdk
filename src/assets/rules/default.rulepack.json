@@ -5,7 +5,7 @@
       "id": "exfil.system_prompt.reveal_system_prompt",
       "category": "prompt_exfiltration",
       "patternType": "regex",
-      "pattern": "(system\\s+prompt|reveal\\s+.*system)",
+      "pattern": "(system\\s+prompt|reveal\\s+\\S+\\s+system)",
       "flags": "i",
       "risk": "high",
       "score": 0.8,
@@ -76,7 +76,7 @@
       "id": "secrets.request.password.en",
       "category": "secrets_request",
       "patternType": "regex",
-      "pattern": "(tell me|give me|share|what is)\\s+.*(password|passcode|pin)",
+      "pattern": "(tell me|give me|share|what is|send me|show me)\\s+[\\s\\S]*?(password|passcode|pin)|^\\s*(password|passcode|pin)\\s*[!?.]?\\s*$",
       "flags": "i",
       "negativePattern": "(?:do\\s+not|don't|never|shouldn't|should\\s+not|must\\s+not)\\s+(?:share|give|tell|reveal)|(?:writing\\s+a\\s+novel|my\\s+character\\s+says|is\\s+that\\s+realistic|fictional\\s+context)",
       "negativeFlags": "i",
@@ -92,7 +92,7 @@
       "id": "secrets.request.password.cyrillic_a",
       "category": "secrets_request",
       "patternType": "regex",
-      "pattern": "(tell me|give me|share)\\s+.*p[a\u0430]ssword",
+      "pattern": "(tell me|give me|share)\\s+[\\s\\S]*?p[a\u0430]ssword",
       "flags": "i",
       "negativePattern": "(?:do\\s+not|don't|never|shouldn't|should\\s+not|must\\s+not)\\s+(?:share|give|tell|reveal)|(?:writing\\s+a\\s+novel|my\\s+character\\s+says|is\\s+that\\s+realistic|fictional\\s+context)",
       "negativeFlags": "i",
@@ -115,7 +115,7 @@
       "id": "secrets.request.password.ko",
       "category": "secrets_request",
       "patternType": "regex",
-      "pattern": "(비밀번호|패스워드|핀번호).*(알려|말해|줘|뭐야)",
+      "pattern": "(비밀번호|패스워드|핀번호|password|passcode|pin)[\\s\\S]*?(알려|말해|줘|뭐야|내놔|달라|줘봐|보여|넘겨|전달|보내|주세요|좀)",
       "flags": "i",
       "risk": "medium",
       "score": 0.55,
@@ -993,6 +993,54 @@
         "missed"
       ],
       "summary": "Injection - Test Prefix"
+    },
+    {
+      "id": "response.leak.system_prompt",
+      "category": "response_leak",
+      "patternType": "regex",
+      "pattern": "(my\\s+(system\\s+)?instructions\\s+(are|say)|here\\s+is\\s+my\\s+(system\\s+)?prompt|\\bsystem\\s+prompt\\s*:)",
+      "flags": "i",
+      "risk": "high",
+      "score": 0.85,
+      "tags": ["response_leak", "system_disclosure"],
+      "summary": "LLM response appears to leak system prompt or instructions.",
+      "scopes": ["response"]
+    },
+    {
+      "id": "response.leak.internal_instruction",
+      "category": "response_leak",
+      "patternType": "regex",
+      "pattern": "(as\\s+an?\\s+AI[,.]?\\s+I\\s+(was|am)\\s+(told|instructed|programmed)|my\\s+internal\\s+(rules|guidelines|instructions))",
+      "flags": "i",
+      "risk": "medium",
+      "score": 0.6,
+      "tags": ["response_leak", "internal_disclosure"],
+      "summary": "LLM response references internal instructions or programming.",
+      "scopes": ["response"]
+    },
+    {
+      "id": "response.harmful.credential_disclosure",
+      "category": "response_credential_leak",
+      "patternType": "regex",
+      "pattern": "(password\\s*(is|:|=)\\s*\\S+|api[_\\s]?key\\s*(is|:|=)\\s*\\S+|secret[_\\s]?key\\s*(is|:|=)\\s*\\S+|access[_\\s]?token\\s*(is|:|=)\\s*\\S+)",
+      "flags": "i",
+      "risk": "high",
+      "score": 0.8,
+      "tags": ["response_leak", "credential"],
+      "summary": "LLM response appears to disclose credentials or API keys.",
+      "scopes": ["response"]
+    },
+    {
+      "id": "response.harmful.code_injection",
+      "category": "response_harmful",
+      "patternType": "regex",
+      "pattern": "(<script[\\s>]|javascript\\s*:|on(error|load|click)\\s*=)",
+      "flags": "i",
+      "risk": "medium",
+      "score": 0.65,
+      "tags": ["response_harmful", "xss", "code_injection"],
+      "summary": "LLM response contains potential script injection or XSS payload.",
+      "scopes": ["response"]
     }
   ]
 }

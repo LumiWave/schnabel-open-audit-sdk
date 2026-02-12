@@ -35,6 +35,7 @@ export interface ChunkViews {
 export interface InputViews {
   prompt: TextViewSet;
   chunks?: ChunkViews[] | undefined;
+  response?: TextViewSet | undefined;
 }
 
 /**

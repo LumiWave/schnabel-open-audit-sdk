@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { InputSource } from "../../normalizer/types.js";
 import type { RiskLevel } from "../types.js";
 
-export type RuleScope = "prompt" | "chunks";
+export type RuleScope = "prompt" | "chunks" | "response";
 export type PatternType = "regex" | "keyword";
 
 export interface RuleSpec {
@@ -73,6 +73,12 @@ function perfGuardRegex(ruleId: string, pattern: string, label: "pattern" | "neg
   if (/\([^)]*[*+][^)]*\)\s*[*+]/.test(pattern)) {
     throw new Error(`RulePack: potential nested quantifier (ReDoS risk) for ${label} in rule: ${ruleId}`);
   }
+
+  // Disallow greedy .\s+.* which can cause catastrophic backtracking.
+  // Non-greedy [\s\S]*? or .+? are accepted.
+  if (/\\s[+*]\.(\*|\+)(?!\?)/.test(pattern)) {
+    throw new Error(`RulePack: greedy \\s+.* pattern (ReDoS risk) for ${label} in rule: ${ruleId}. Use non-greedy .*? instead.`);
+  }
 }
 
 const DEFAULT_SCOPES: RuleScope[] = ["prompt", "chunks"];
@@ -121,7 +127,7 @@ function validateRule(rule: RuleSpec): void {
 
   if (rule.scopes) {
     for (const sc of rule.scopes) {
-      if (sc !== "prompt" && sc !== "chunks") {
+      if (sc !== "prompt" && sc !== "chunks" && sc !== "response") {
         throw new Error(`RulePack: invalid scope "${sc}" for ${rule.id}`);
       }
     }

@@ -70,7 +70,7 @@ export function createRulePackScanner(opts: RulePackScannerOptions = {}): Scanne
       try {
         const st = fs.statSync(packPath);
         if (st.mtimeMs > packMtimeMs) reload();
-      } catch {}
+      } catch { /* mtime check failed; will retry on next scan */ }
     }
 
     return pack!;
@@ -118,7 +118,7 @@ export function createRulePackScanner(opts: RulePackScannerOptions = {}): Scanne
     const details: Record<string, MatchDetail> = {};
 
     for (const v of VIEW_SCAN_ORDER) {
-      const t = (viewMap as any)[v] ?? "";
+      const t = viewMap[v as keyof typeof viewMap] ?? "";
       const res = matchInText(rule, t);
       if (res.hit && typeof res.index === "number") {
         matchedViews.push(v);
@@ -151,7 +151,8 @@ export function createRulePackScanner(opts: RulePackScannerOptions = {}): Scanne
         if (!hit) continue;
 
         const view = hit.preferred;
-        const text = (base.views!.prompt as any)[view] ?? "";
+        const promptViews = base.views!.prompt;
+        const text = promptViews[view as keyof typeof promptViews] ?? "";
         const idx = hit.detail?.index ?? -1;
 
         findings.push({
@@ -200,6 +201,40 @@ export function createRulePackScanner(opts: RulePackScannerOptions = {}): Scanne
             tags: rule.tags ?? [rule.category],
             summary: rule.summary ?? `Rule matched: ${rule.id}`,
             target: { field: "promptChunk", view, source: ch.source, chunkIndex: i },
+            evidence: {
+              ruleId: rule.id,
+              category: rule.category,
+              patternType: rule.patternType,
+              rulePackVersion: version,
+              matchedViews: hit.matchedViews,
+              snippet: idx >= 0 ? snippet(text, idx) : undefined,
+            },
+          });
+        }
+      }
+
+      // Response rules
+      if (base.views!.response) {
+        for (const rule of rules) {
+          if (!rule._scopes.includes("response")) continue;
+
+          const hit = matchAcrossViews(rule, base.views!.response);
+          if (!hit) continue;
+
+          const view = hit.preferred;
+          const responseViews = base.views!.response;
+          const text = responseViews[view as keyof typeof responseViews] ?? "";
+          const idx = hit.detail?.index ?? -1;
+
+          findings.push({
+            id: makeFindingId(scannerName, base.requestId, `${rule.id}:response:${view}`),
+            kind: "detect",
+            scanner: scannerName,
+            score: rule.score,
+            risk: rule.risk,
+            tags: rule.tags ?? [rule.category],
+            summary: rule.summary ?? `Rule matched: ${rule.id}`,
+            target: { field: "response", view },
             evidence: {
               ruleId: rule.id,
               category: rule.category,

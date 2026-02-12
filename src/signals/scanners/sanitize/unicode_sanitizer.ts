@@ -95,6 +95,18 @@ export const UnicodeSanitizerScanner: Scanner = {
       return { ...ch, text: res.text };
     });
 
+    // Response
+    let responseText = base.canonical.responseText;
+    if (views.response && responseText) {
+      const r = sanitizeText(responseText);
+      if (r.stats.changed) {
+        changed = true;
+        views.response.sanitized = r.text;
+        views.response.revealed = r.text;
+        responseText = r.text;
+      }
+    }
+
     // Findings (only if suspicious)
     const pr = riskFrom(p.stats);
     if (p.stats.changed && pr.risk !== "none") {
@@ -131,6 +143,24 @@ export const UnicodeSanitizerScanner: Scanner = {
       }
     }
 
+    if (views.response && responseText) {
+      const rRes = sanitizeText(base.canonical.responseText ?? "");
+      const rrRes = riskFrom(rRes.stats);
+      if (rRes.stats.changed && rrRes.risk !== "none") {
+        findings.push({
+          id: makeFindingId(this.name, base.requestId, "response"),
+          kind: this.kind,
+          scanner: this.name,
+          score: rrRes.score,
+          risk: rrRes.risk,
+          tags: ["unicode", "sanitization", "obfuscation"],
+          summary: "Unicode sanitization applied to response (NFKC / zero-width / bidi).",
+          target: { field: "response", view: "sanitized" },
+          evidence: rRes.stats,
+        });
+      }
+    }
+
     if (!changed) return { input: base, findings };
 
     const updated: NormalizedInput = {
@@ -139,6 +169,7 @@ export const UnicodeSanitizerScanner: Scanner = {
         ...base.canonical,
         prompt: views.prompt.sanitized,
         ...(outChunks.length ? { promptChunksCanonical: outChunks } : {}),
+        ...(responseText !== base.canonical.responseText ? { responseText } : {}),
       },
       features: {
         ...base.features,

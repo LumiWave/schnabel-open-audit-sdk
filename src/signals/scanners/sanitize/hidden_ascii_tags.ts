@@ -104,6 +104,30 @@ export const HiddenAsciiTagsScanner: Scanner = {
       return { ...ch, text: revealed };
     });
 
+    // Response
+    let responseRevealed: string | undefined;
+    if (views.response && base.canonical.responseText) {
+      const r = decodeTagChars(base.canonical.responseText);
+      if (r.tagCount > 0) {
+        changed = true;
+        views.response.sanitized = r.removed;
+        views.response.revealed = r.decoded.length ? `${r.removed}\n${r.decoded}`.trim() : r.removed;
+        responseRevealed = views.response.revealed;
+
+        findings.push({
+          id: makeFindingId(this.name, base.requestId, "response"),
+          kind: this.kind,
+          scanner: this.name,
+          score: 0.85,
+          risk: "high",
+          tags: ["obfuscation", "unicode_tags", "hidden_ascii"],
+          summary: "Hidden ASCII TAG characters detected and decoded in response.",
+          target: { field: "response", view: "revealed" },
+          evidence: { tagCount: r.tagCount, decodedPreview: preview(r.decoded) },
+        });
+      }
+    }
+
     if (!changed) return { input: base, findings };
 
     const updated: NormalizedInput = {
@@ -112,6 +136,7 @@ export const HiddenAsciiTagsScanner: Scanner = {
         ...base.canonical,
         prompt: views.prompt.revealed,
         ...(outChunks.length ? { promptChunksCanonical: outChunks } : {}),
+        ...(responseRevealed !== undefined ? { responseText: responseRevealed } : {}),
       },
       features: {
         ...base.features,

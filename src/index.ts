@@ -19,9 +19,12 @@ export type {
 // --- L2: signals (scanner chain + core types) ---
 export { scanSignals } from "./signals/scan.js";
 export type { ScanOptions } from "./signals/scan.js";
-export type { RiskLevel, ScannerKind, FindingTarget, Finding } from "./signals/types.js";
+export type { RiskLevel, ScannerKind, FindingTarget, Finding, ScannerMetric } from "./signals/types.js";
 export type { Scanner, ScannerContext, ScannerOutput } from "./signals/scanners/scanner.js";
-export { ensureViews, VIEW_SCAN_ORDER, VIEW_PREFERENCE, pickPreferredView } from "./signals/views.js";
+export { ensureViews, initViewSet, VIEW_SCAN_ORDER, VIEW_PREFERENCE, pickPreferredView } from "./signals/views.js";
+export { makeFindingId } from "./signals/util.js";
+export { defineScanner } from "./signals/define_scanner.js";
+export type { DefineScannerOptions } from "./signals/define_scanner.js";
 
 // Built-in scanners (sanitize / enrich / detect)
 export { UnicodeSanitizerScanner } from "./signals/scanners/sanitize/unicode_sanitizer.js";
