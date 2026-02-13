@@ -63,6 +63,8 @@ export type { SaveEvidenceOptions } from "./core/evidence_dump.js";
 export { renderEvidenceReportEN } from "./core/evidence_report_en.js";
 export type { ReportOptions } from "./core/evidence_report_en.js";
 export { renderEvidenceReportKR } from "./core/evidence_report_kr.js";
+export { renderAuditReportHTML } from "./core/evidence_report_html.js";
+export type { HtmlReportOptions, ScenarioResultMeta } from "./core/evidence_report_html.js";
 
 export {
   saveEvidenceReportMarkdown,
@@ -90,13 +92,18 @@ export {
 export { InMemoryHistoryStore } from "./core/history_store.js";
 export type { HistoryStore, HistoryTurnV0 } from "./core/history_store.js";
 
-// --- Inno Platform integration (SUI blockchain) ---
+// --- Inno Platform integration (SUI blockchain + Walrus) ---
 export { InnoConnect, InnoConnectError } from "./inno/inno_connect.js";
 export type {
+  BaseResponse,
   InnoConnectConfig,
-  MultisigParticipant,
-  MultisigWalletResponse,
-  InnoSubmitResponse,
+  CreateWalletOptions,
+  WalletAddress,
+  UploadBytesOptions,
+  WalrusUploadResult,
+  WalrusStoreResponse,
+  BlobExistsResult,
+  BlobExpiryResult,
   InnoAuditMeta,
 } from "./inno/types.js";
 export { InnoAuditSession, createInnoAuditSession } from "./inno/run_audit_inno.js";
@@ -105,6 +112,7 @@ export {
   getSuiExplorerTxUrl,
   getSuiExplorerAccountUrl,
   getSuiExplorerUrl,
+  getWalrusBlobUrl,
   openSuiExplorer,
   openSuiExplorerAccount,
   openInBrowser,

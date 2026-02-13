@@ -4,27 +4,46 @@ import { fromAgentIngressEvent } from "../src/adapters/generic_agent.js";
 import { createInnoAuditSession, InnoAuditSession } from "../src/inno/run_audit_inno.js";
 import { UnicodeSanitizerScanner } from "../src/signals/scanners/sanitize/unicode_sanitizer.js";
 import { KeywordInjectionScanner } from "../src/signals/scanners/detect/keyword_injection.js";
-import type { MultisigWalletResponse } from "../src/inno/types.js";
+import type { WalletAddress } from "../src/inno/types.js";
 
 // ---------------------------------------------------------------------------
 // Mock data
 // ---------------------------------------------------------------------------
 
-const MOCK_WALLET: MultisigWalletResponse = {
-  multisigAddress: "0xabc123multisig",
-  userKeyShare: "secret-key-share",
-  participants: [
-    { publicKey: "pk-user", weight: 1 },
-    { publicKey: "pk-server", weight: 1 },
-  ],
-  threshold: 2,
+const MOCK_WALLET_RAW = {
+  base_symbol: "SUI",
+  address: "0xabc123wallet",
+  pk: "",
+  bech32: "sui1abc123bech32",
 };
 
-const MOCK_SUBMIT = {
-  txDigest: "DiGeSt456",
-  walrusBlobId: "walrus-blob-002",
-  timestamp: 1700000000000,
-  network: "mainnet",
+const MOCK_UPLOAD_RAW = {
+  response: {
+    blob_id: "walrus-blob-002",
+    blob_url: "https://walrus-aggregator.test/v1/blobs/walrus-blob-002",
+    store_url: "https://walrus-publisher.test/v1/blobs?epochs=1",
+    store_response: {
+      newlyCreated: {
+        blobObject: {
+          id: "0xblobobject123",
+          blobId: "walrus-blob-002",
+          registeredEpoch: 512,
+          size: 500,
+        },
+        cost: 2000,
+      },
+    },
+  },
+};
+
+function wrapResponse(value: unknown): unknown {
+  return { return: 0, message: "success", value };
+}
+
+const BASE_CONFIG = {
+  baseUrl: "https://api.inno.test",
+  publisherUrl: "https://walrus-publisher.test",
+  aggregatorUrl: "https://walrus-aggregator.test",
 };
 
 const SCANNERS = [UnicodeSanitizerScanner, KeywordInjectionScanner];
@@ -49,20 +68,20 @@ describe("InnoAuditSession", () => {
     originalFetch = globalThis.fetch;
     fetchCallCount = 0;
 
-    // Mock fetch: first call → wallet, subsequent calls → submit
+    // Mock fetch: first call → wallet, subsequent calls → upload
     globalThis.fetch = vi.fn().mockImplementation(() => {
       fetchCallCount++;
       if (fetchCallCount === 1) {
         return Promise.resolve({
           ok: true,
           status: 200,
-          json: () => Promise.resolve(MOCK_WALLET),
+          json: () => Promise.resolve(wrapResponse(MOCK_WALLET_RAW)),
         } as Response);
       }
       return Promise.resolve({
         ok: true,
         status: 200,
-        json: () => Promise.resolve(MOCK_SUBMIT),
+        json: () => Promise.resolve(wrapResponse(MOCK_UPLOAD_RAW)),
       } as Response);
     });
   });
@@ -75,7 +94,7 @@ describe("InnoAuditSession", () => {
 
   it("createInnoAuditSession returns an InnoAuditSession", () => {
     const session = createInnoAuditSession({
-      inno: { baseUrl: "https://api.inno.test" },
+      inno: BASE_CONFIG,
       auditDefaults: { scanners: SCANNERS },
     });
     expect(session).toBeInstanceOf(InnoAuditSession);
@@ -86,13 +105,13 @@ describe("InnoAuditSession", () => {
 
   it("full lifecycle: start → multiple audits → finish", async () => {
     const session = createInnoAuditSession({
-      inno: { baseUrl: "https://api.inno.test" },
+      inno: BASE_CONFIG,
       auditDefaults: { scanners: SCANNERS },
     });
 
     await session.start();
     expect(session.sessionState).toBe("started");
-    expect(session.walletInfo?.multisigAddress).toBe("0xabc123multisig");
+    expect(session.walletInfo?.address).toBe("0xabc123wallet");
 
     // Run 3 audits
     const r1 = await session.audit(makeRequest("Test prompt 1"));
@@ -103,21 +122,34 @@ describe("InnoAuditSession", () => {
     expect(r2.decision).toBeDefined();
     expect(r3.decision).toBeDefined();
 
-    // Finish → submit all
+    // Finish → batch upload all evidence as one blob (default)
     const result = await session.finish();
     expect(session.sessionState).toBe("finished");
     expect(result.auditResults).toHaveLength(3);
-    expect(result.inno?.submission?.txDigest).toBe("DiGeSt456");
-    expect(result.inno?.walletExplorerUrl).toBe("https://suiscan.xyz/mainnet/account/0xabc123multisig");
-    expect(result.inno?.txExplorerUrl).toBe("https://suiscan.xyz/mainnet/tx/DiGeSt456");
+    expect(result.inno?.submission?.blobId).toBe("walrus-blob-002");
+    expect(result.inno?.submission?.blobObjectId).toBe("0xblobobject123");
+    expect(result.inno?.walletExplorerUrl).toContain("suiscan.xyz/testnet/account/0xabc123wallet");
+    expect(result.uploads).toHaveLength(1); // batch mode → single upload
+
+    // batch: false → individual uploads
+    fetchCallCount = 0; // reset for new session
+    const session2 = createInnoAuditSession({
+      inno: BASE_CONFIG,
+      auditDefaults: { scanners: SCANNERS },
+    });
+    await session2.start();
+    await session2.audit(makeRequest("a"));
+    await session2.audit(makeRequest("b"));
+    const result2 = await session2.finish({ batch: false });
+    expect(result2.uploads).toHaveLength(2);
   });
 
   // -- wallet callback --
 
-  it("calls onWalletCreated with full wallet info (including keyShare)", async () => {
+  it("calls onWalletCreated with wallet info", async () => {
     const walletCallback = vi.fn();
     const session = createInnoAuditSession({
-      inno: { baseUrl: "https://api.inno.test" },
+      inno: BASE_CONFIG,
       auditDefaults: { scanners: SCANNERS },
       onWalletCreated: walletCallback,
     });
@@ -125,41 +157,25 @@ describe("InnoAuditSession", () => {
     await session.start();
 
     expect(walletCallback).toHaveBeenCalledOnce();
-    const received = walletCallback.mock.calls[0]![0] as MultisigWalletResponse;
-    expect(received.userKeyShare).toBe("secret-key-share");
-    expect(received.multisigAddress).toBe("0xabc123multisig");
-  });
-
-  // -- security: no keyShare in results --
-
-  it("does NOT expose userKeyShare in walletInfo or session result", async () => {
-    const session = createInnoAuditSession({
-      inno: { baseUrl: "https://api.inno.test" },
-      auditDefaults: { scanners: SCANNERS },
-    });
-
-    await session.start();
-    expect("userKeyShare" in session.walletInfo!).toBe(false);
-
-    await session.audit(makeRequest());
-    const result = await session.finish();
-    expect("userKeyShare" in result.inno!.wallet).toBe(false);
+    const received = walletCallback.mock.calls[0]![0] as WalletAddress;
+    expect(received.address).toBe("0xabc123wallet");
+    expect(received.bech32).toBe("sui1abc123bech32");
   });
 
   // -- network config --
 
   it("uses specified network for explorer URL", async () => {
     const session = createInnoAuditSession({
-      inno: { baseUrl: "https://api.inno.test" },
+      inno: BASE_CONFIG,
       auditDefaults: { scanners: SCANNERS },
-      network: "testnet",
+      network: "mainnet",
     });
 
     await session.start();
     await session.audit(makeRequest());
     const result = await session.finish();
 
-    expect(result.inno!.txExplorerUrl).toBe("https://suiscan.xyz/testnet/tx/DiGeSt456");
+    expect(result.inno!.walletExplorerUrl).toBe("https://suiscan.xyz/mainnet/account/0xabc123wallet");
   });
 
   // -- error handling: wallet fail + continue --
@@ -169,7 +185,7 @@ describe("InnoAuditSession", () => {
     const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const session = createInnoAuditSession({
-      inno: { baseUrl: "https://api.inno.test" },
+      inno: BASE_CONFIG,
       auditDefaults: { scanners: SCANNERS },
     });
 
@@ -192,7 +208,7 @@ describe("InnoAuditSession", () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error("network down"));
 
     const session = createInnoAuditSession({
-      inno: { baseUrl: "https://api.inno.test" },
+      inno: BASE_CONFIG,
       auditDefaults: { scanners: SCANNERS },
       continueOnInnoError: false,
     });
@@ -200,9 +216,9 @@ describe("InnoAuditSession", () => {
     await expect(session.start()).rejects.toThrow("network down");
   });
 
-  // -- error handling: submit fail + continue --
+  // -- error handling: upload fail + continue --
 
-  it("returns wallet info even when submission fails", async () => {
+  it("returns wallet info even when upload fails", async () => {
     let callCount = 0;
     globalThis.fetch = vi.fn().mockImplementation(() => {
       callCount++;
@@ -210,15 +226,15 @@ describe("InnoAuditSession", () => {
         return Promise.resolve({
           ok: true,
           status: 200,
-          json: () => Promise.resolve(MOCK_WALLET),
+          json: () => Promise.resolve(wrapResponse(MOCK_WALLET_RAW)),
         } as Response);
       }
-      return Promise.reject(new Error("submit failed"));
+      return Promise.reject(new Error("upload failed"));
     });
     const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const session = createInnoAuditSession({
-      inno: { baseUrl: "https://api.inno.test" },
+      inno: BASE_CONFIG,
       auditDefaults: { scanners: SCANNERS },
     });
 
@@ -226,8 +242,9 @@ describe("InnoAuditSession", () => {
     await session.audit(makeRequest());
     const result = await session.finish();
 
-    expect(result.inno?.wallet.multisigAddress).toBe("0xabc123multisig");
+    expect(result.inno?.wallet?.address).toBe("0xabc123wallet");
     expect(result.inno?.submission).toBeUndefined();
+    expect(result.uploads).toBeUndefined();
 
     consoleSpy.mockRestore();
   });
@@ -236,7 +253,7 @@ describe("InnoAuditSession", () => {
 
   it("throws when calling start() twice", async () => {
     const session = createInnoAuditSession({
-      inno: { baseUrl: "https://api.inno.test" },
+      inno: BASE_CONFIG,
       auditDefaults: { scanners: SCANNERS },
     });
 
@@ -246,7 +263,7 @@ describe("InnoAuditSession", () => {
 
   it("throws when calling audit() before start()", async () => {
     const session = createInnoAuditSession({
-      inno: { baseUrl: "https://api.inno.test" },
+      inno: BASE_CONFIG,
       auditDefaults: { scanners: SCANNERS },
     });
 
@@ -255,7 +272,7 @@ describe("InnoAuditSession", () => {
 
   it("throws when calling finish() before start()", async () => {
     const session = createInnoAuditSession({
-      inno: { baseUrl: "https://api.inno.test" },
+      inno: BASE_CONFIG,
       auditDefaults: { scanners: SCANNERS },
     });
 
@@ -264,7 +281,7 @@ describe("InnoAuditSession", () => {
 
   it("throws when calling audit() after finish()", async () => {
     const session = createInnoAuditSession({
-      inno: { baseUrl: "https://api.inno.test" },
+      inno: BASE_CONFIG,
       auditDefaults: { scanners: SCANNERS },
     });
 

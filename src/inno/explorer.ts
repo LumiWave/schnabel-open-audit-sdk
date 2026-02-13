@@ -46,6 +46,21 @@ export function getSuiExplorerAccountUrl(
 /** @deprecated Use `getSuiExplorerTxUrl` instead. */
 export const getSuiExplorerUrl = getSuiExplorerTxUrl;
 
+/**
+ * Build the Walrus aggregator URL for a blob.
+ *
+ * @example
+ * getWalrusBlobUrl("6P7xM7q...", "https://walrus-testnet-aggregator.nodeinfra.com")
+ * // → "https://walrus-testnet-aggregator.nodeinfra.com/v1/blobs/6P7xM7q..."
+ */
+export function getWalrusBlobUrl(
+  blobId: string,
+  aggregatorUrl: string,
+): string {
+  const base = aggregatorUrl.replace(/\/+$/, "");
+  return `${base}/v1/blobs/${blobId}`;
+}
+
 // ---------------------------------------------------------------------------
 // Browser open
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { getSuiExplorerTxUrl, getSuiExplorerAccountUrl, getSuiExplorerUrl } from "../src/inno/explorer.js";
+import { getSuiExplorerTxUrl, getSuiExplorerAccountUrl, getSuiExplorerUrl, getWalrusBlobUrl } from "../src/inno/explorer.js";
 
 describe("getSuiExplorerTxUrl()", () => {
   it("returns mainnet TX URL by default", () => {
@@ -35,5 +35,23 @@ describe("getSuiExplorerUrl() (deprecated alias)", () => {
   it("is an alias for getSuiExplorerTxUrl", () => {
     expect(getSuiExplorerUrl("AbC123", "mainnet"))
       .toBe(getSuiExplorerTxUrl("AbC123", "mainnet"));
+  });
+});
+
+describe("getWalrusBlobUrl()", () => {
+  it("returns aggregator blob URL", () => {
+    const url = getWalrusBlobUrl(
+      "6P7xM7qA8y2y",
+      "https://walrus-testnet-aggregator.nodeinfra.com",
+    );
+    expect(url).toBe("https://walrus-testnet-aggregator.nodeinfra.com/v1/blobs/6P7xM7qA8y2y");
+  });
+
+  it("strips trailing slashes from aggregator URL", () => {
+    const url = getWalrusBlobUrl(
+      "blobId123",
+      "https://walrus-aggregator.test///",
+    );
+    expect(url).toBe("https://walrus-aggregator.test/v1/blobs/blobId123");
   });
 });

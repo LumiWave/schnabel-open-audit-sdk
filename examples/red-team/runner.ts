@@ -3,6 +3,27 @@ import fs from "node:fs";
 import { loadScenarios } from "./load_scenarios.js";
 import type { AttackScenario, PayloadEncoding, TextView } from "./types.js";
 
+// ---------------------------------------------------------------------------
+// Load .env file (zero-dependency, reads from project root)
+// ---------------------------------------------------------------------------
+function loadEnvFile(filePath: string): void {
+  if (!fs.existsSync(filePath)) return;
+  const content = fs.readFileSync(filePath, "utf-8");
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx < 1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    const value = trimmed.slice(eqIdx + 1).trim();
+    // Don't override existing env vars (CLI takes precedence)
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+loadEnvFile(path.resolve(".env"));
+
 /** Missed scenario: expected detect but got none. Used to suggest new rulepack rules. */
 export interface MissedScenario {
   scenarioId: string;
@@ -15,6 +36,7 @@ export interface MissedScenario {
 import { fromAgentIngressEvent } from "../../src/adapters/generic_agent.js";
 import { runAudit } from "../../src/core/run_audit.js";
 import { renderEvidenceReportEN } from "../../src/core/evidence_report_en.js";
+import { renderAuditReportHTML } from "../../src/core/evidence_report_html.js";
 import { UnicodeSanitizerScanner } from "../../src/signals/scanners/sanitize/unicode_sanitizer.js";
 import { HiddenAsciiTagsScanner } from "../../src/signals/scanners/sanitize/hidden_ascii_tags.js";
 import { SeparatorCollapseScanner } from "../../src/signals/scanners/sanitize/separator_collapse.js";
@@ -110,6 +132,9 @@ function getInnoConfig(): InnoConnectConfig | undefined {
   if (!baseUrl) return undefined;
   return {
     baseUrl,
+    apiVersion: process.env["INNO_API_VERSION"] ?? "v1.0",
+    publisherUrl: process.env["WALRUS_PUBLISHER_URL"] ?? "https://walrus-testnet-publisher.nodeinfra.com",
+    aggregatorUrl: process.env["WALRUS_AGGREGATOR_URL"] ?? "https://walrus-testnet-aggregator.nodeinfra.com",
     apiKey: process.env["INNO_API_KEY"],
   };
 }
@@ -151,13 +176,12 @@ async function runRedTeam() {
     ? createInnoAuditSession({
         inno: innoConfig,
         auditDefaults: { scanners, scanOptions: { mode: "audit", failFast: false } },
-        network: (process.env["SUI_NETWORK"] as "mainnet" | "testnet" | "devnet") ?? "mainnet",
+        walletOptions: { customerId: 1, nickname: "schnabel-redteam" },
+        network: (process.env["SUI_NETWORK"] as "mainnet" | "testnet" | "devnet") ?? "testnet",
         openExplorerOnWalletCreated: true,
         onWalletCreated: (wallet) => {
-          console.log(c.cyan(`\n🔑 Multisig wallet created`));
-          console.log(c.cyan(`   Address:   ${wallet.multisigAddress}`));
-          console.log(c.cyan(`   KeyShare:  ${wallet.userKeyShare.slice(0, 8)}...`));
-          console.log(c.cyan(`   Threshold: ${wallet.threshold} / ${wallet.participants.length} participants\n`));
+          console.log(c.cyan(`\n🔑 SUI wallet created`));
+          console.log(c.cyan(`   Address: ${wallet.address}\n`));
         },
       })
     : null;
@@ -165,6 +189,11 @@ async function runRedTeam() {
   if (innoSession) {
     console.log(c.cyan(`🔗 Inno Platform: ${innoConfig!.baseUrl}`));
     await innoSession.start();
+    if (innoSession.walletInfo) {
+      console.log(c.cyan(`   ✅ Wallet ready: ${innoSession.walletInfo.address}\n`));
+    } else {
+      console.log(c.yellow(`   ⚠️  Wallet creation failed — audits will run locally only\n`));
+    }
   } else {
     console.log(c.gray("ℹ️  Inno Platform: disabled (set INNO_API_BASE_URL to enable)\n"));
   }
@@ -258,18 +287,42 @@ async function runRedTeam() {
   // ---------------------------------------------------------------------------
   // Inno Platform: finish session → submit results to SUI/Walrus
   // ---------------------------------------------------------------------------
+  // Build HTML report (used for Walrus upload + local save)
+  const auditResultsForHtml = runEntries
+    .filter((e) => e.result !== undefined)
+    .map((e) => e.result!);
+  const htmlReport = renderAuditReportHTML(auditResultsForHtml, {
+    title: "Schnabel Red Team Report",
+    runId: ts,
+    walletAddress: innoSession?.walletInfo?.address,
+    walletExplorerUrl: innoSession?.walletInfo
+      ? `https://suiscan.xyz/${(process.env["SUI_NETWORK"] ?? "testnet")}/account/${innoSession.walletInfo.address}`
+      : undefined,
+    network: process.env["SUI_NETWORK"] ?? "testnet",
+    scenarioResults: runEntries.map((e) => ({
+      name: e.scenario.name,
+      id: e.scenario.id,
+      ok: e.ok ?? false,
+      error: e.error,
+      encoding: e.encoding,
+      source: e.scenario.source,
+    })),
+  });
+
   let innoResult: InnoSessionResult | undefined;
   if (innoSession) {
     console.log(c.cyan(`\n🔗 Finishing Inno session (${innoSession.auditCount} audits)...`));
     innoResult = await innoSession.finish({ openExplorer: true });
 
     if (innoResult.inno?.submission) {
-      console.log(c.cyan(`   TX Digest:  ${innoResult.inno.submission.txDigest}`));
-      console.log(c.cyan(`   Walrus:     ${innoResult.inno.submission.walrusBlobId ?? "N/A"}`));
-      console.log(c.cyan(`   Wallet:     ${innoResult.inno.walletExplorerUrl}`));
-      console.log(c.cyan(`   TX:         ${innoResult.inno.txExplorerUrl}`));
+      console.log(c.cyan(`   Blob ID:    ${innoResult.inno.submission.blobId}`));
+      console.log(c.cyan(`   Blob URL:   ${innoResult.inno.submission.blobUrl}`));
+      console.log(c.cyan(`   Object ID:  ${innoResult.inno.submission.blobObjectId ?? "N/A"}`));
+      if (innoResult.inno.walletExplorerUrl) {
+        console.log(c.cyan(`   Wallet:     ${innoResult.inno.walletExplorerUrl}`));
+      }
     } else {
-      console.log(c.yellow("   ⚠️  Inno submission failed or skipped (audit results still saved locally)"));
+      console.log(c.yellow("   ⚠️  Walrus upload failed or skipped (audit results still saved locally)"));
     }
   }
 
@@ -301,12 +354,11 @@ async function runRedTeam() {
     // Inno/SUI metadata (if available)
     ...(innoResult?.inno ? {
       sui: {
-        walletAddress: innoResult.inno.wallet.multisigAddress,
+        walletAddress: innoResult.inno.wallet?.address,
         walletExplorerUrl: innoResult.inno.walletExplorerUrl,
-        txDigest: innoResult.inno.submission?.txDigest,
-        txExplorerUrl: innoResult.inno.txExplorerUrl,
-        walrusBlobId: innoResult.inno.submission?.walrusBlobId,
-        network: innoResult.inno.submission?.network,
+        blobId: innoResult.inno.submission?.blobId,
+        blobUrl: innoResult.inno.submission?.blobUrl,
+        blobObjectId: innoResult.inno.submission?.blobObjectId,
       },
     } : {}),
     entries: runEntries.map((e) => {
@@ -336,17 +388,16 @@ async function runRedTeam() {
   // Inno/SUI section in report
   if (innoResult?.inno) {
     reportParts.push(
-      `## SUI Blockchain Record`,
+      `## SUI / Walrus Record`,
       ``,
       `| Item | Value |`,
       `|------|-------|`,
-      `| **Wallet** | \`${innoResult.inno.wallet.multisigAddress}\` |`,
+      `| **Wallet** | \`${innoResult.inno.wallet?.address ?? "N/A"}\` |`,
       `| **Wallet Explorer** | [suiscan.xyz](${innoResult.inno.walletExplorerUrl}) |`,
       ...(innoResult.inno.submission ? [
-        `| **TX Digest** | \`${innoResult.inno.submission.txDigest}\` |`,
-        `| **TX Explorer** | [suiscan.xyz](${innoResult.inno.txExplorerUrl}) |`,
-        `| **Walrus Blob** | \`${innoResult.inno.submission.walrusBlobId ?? "N/A"}\` |`,
-        `| **Network** | ${innoResult.inno.submission.network} |`,
+        `| **Blob ID** | \`${innoResult.inno.submission.blobId}\` |`,
+        `| **Blob URL** | [walrus](${innoResult.inno.submission.blobUrl}) |`,
+        `| **Object ID** | \`${innoResult.inno.submission.blobObjectId ?? "N/A"}\` |`,
       ] : [
         `| **Submission** | ⚠️ Failed or skipped |`,
       ]),
@@ -407,7 +458,12 @@ async function runRedTeam() {
     reportParts.push(``);
   }
   fs.writeFileSync(singleReportPath, reportParts.join("\n"), "utf8");
-  console.log(c.gray(`\n📄 Report: ${singleReportPath}`));
+  console.log(c.gray(`\n📄 Report (MD): ${singleReportPath}`));
+
+  // Save HTML report locally
+  const htmlReportPath = path.join(redTeamOutDir, "reports", `${ts}.redteam.report.html`);
+  fs.writeFileSync(htmlReportPath, htmlReport, "utf8");
+  console.log(c.gray(`📄 Report (HTML): ${htmlReportPath}`));
 
   console.log(`\n📊 Summary: ${c.green(String(passed) + " Passed")}, ${c.red(String(failed) + " Failed")}`);
 

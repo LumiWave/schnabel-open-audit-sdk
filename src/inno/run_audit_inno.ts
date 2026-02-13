@@ -2,32 +2,29 @@
  * InnoAuditSession — Session-based orchestrator for Inno Platform integration.
  *
  * Lifecycle:
- *  1. start()  → Create multisig wallet (once per session)
+ *  1. start()  → Create SUI wallet (once per session)
  *  2. audit()  → Run individual audits, results accumulate
- *  3. finish() → Submit all accumulated evidence to Inno Platform,
- *                optionally open SUI explorer
- *
- * This models real-world usage where multiple audits are run in a session
- * (e.g. red-team scenario batches) and submitted together at the end.
+ *  3. finish() → Upload all accumulated evidence to Walrus,
+ *                optionally verify blob existence, return session result
  */
 
+import { Buffer } from "node:buffer";
 import type { AuditRequest } from "../normalizer/types.js";
 import { runAudit, type AuditRunOptions, type AuditResult } from "../core/run_audit.js";
-import { renderEvidenceReportEN } from "../core/evidence_report_en.js";
-import type { EvidencePackageV0 } from "../core/evidence_package.js";
 
 import type {
   InnoConnectConfig,
-  MultisigWalletResponse,
-  InnoSubmitResponse,
+  CreateWalletOptions,
+  WalletAddress,
+  WalrusUploadResult,
   InnoAuditMeta,
+  UploadBytesOptions,
 } from "./types.js";
 import { InnoConnect, InnoConnectError } from "./inno_connect.js";
 import {
-  getSuiExplorerTxUrl,
   getSuiExplorerAccountUrl,
-  openSuiExplorer,
   openSuiExplorerAccount,
+  getWalrusBlobUrl,
   type SuiNetwork,
 } from "./explorer.js";
 
@@ -42,14 +39,20 @@ export interface InnoAuditSessionConfig {
   /** Default scanner chain & audit options used for each audit() call. */
   auditDefaults: AuditRunOptions;
 
-  /** Called once when the multisig wallet is created during start(). */
-  onWalletCreated?: ((wallet: MultisigWalletResponse) => void) | undefined;
+  /** Called once when the wallet is created during start(). */
+  onWalletCreated?: ((wallet: WalletAddress) => void) | undefined;
 
   /** Open suiscan.xyz account page when wallet is created. Default: false. */
   openExplorerOnWalletCreated?: boolean | undefined;
 
-  /** SUI network for explorer URLs. Default: "mainnet". */
+  /** SUI network for explorer URLs. Default: "testnet". */
   network?: SuiNetwork | undefined;
+
+  /** Options passed to createWallet() during start(). */
+  walletOptions?: CreateWalletOptions | undefined;
+
+  /** Walrus upload options applied to all evidence submissions. */
+  uploadDefaults?: UploadBytesOptions | undefined;
 
   /**
    * If true (default), Inno API errors are caught and logged as warnings.
@@ -66,8 +69,11 @@ export interface InnoSessionResult {
   /** All audit results collected during the session. */
   auditResults: AuditResult[];
 
-  /** Inno/SUI metadata (wallet, submission, explorer URL). */
+  /** Inno/SUI metadata (wallet, submissions). */
   inno?: InnoAuditMeta | undefined;
+
+  /** Per-evidence upload results (parallel to auditResults). */
+  uploads?: WalrusUploadResult[] | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -83,13 +89,13 @@ export class InnoAuditSession {
   private readonly continueOnError: boolean;
 
   private state: SessionState = "idle";
-  private wallet: MultisigWalletResponse | undefined;
+  private wallet: WalletAddress | undefined;
   private results: AuditResult[] = [];
 
   constructor(config: InnoAuditSessionConfig) {
     this.config = config;
     this.connect = new InnoConnect(config.inno);
-    this.network = config.network ?? "mainnet";
+    this.network = config.network ?? "testnet";
     this.continueOnError = config.continueOnInnoError ?? true;
   }
 
@@ -99,7 +105,7 @@ export class InnoAuditSession {
 
   /**
    * Start the audit session.
-   * Creates a multisig wallet via Inno Platform.
+   * Creates a SUI wallet via Inno Platform.
    */
   async start(): Promise<void> {
     if (this.state !== "idle") {
@@ -107,23 +113,23 @@ export class InnoAuditSession {
     }
 
     try {
-      this.wallet = await this.connect.createMultisigWallet();
+      this.wallet = await this.connect.createWallet(this.config.walletOptions);
       if (this.config.onWalletCreated) {
         this.config.onWalletCreated(this.wallet);
       }
       if (this.config.openExplorerOnWalletCreated && this.wallet) {
         try {
-          await openSuiExplorerAccount(this.wallet.multisigAddress, this.network);
+          await openSuiExplorerAccount(this.wallet.address, this.network);
         } catch {
           // Best-effort
         }
       }
     } catch (err) {
       if (!this.continueOnError) throw err;
-      console.warn(
-        "[InnoConnect] Multisig wallet creation failed:",
-        err instanceof InnoConnectError ? err.message : err,
-      );
+      const detail = err instanceof InnoConnectError
+        ? `${err.message}${err.code !== undefined ? ` (code=${err.code})` : ""}`
+        : String(err);
+      console.warn(`[InnoConnect] Wallet creation failed: ${detail}`);
     }
 
     this.state = "started";
@@ -132,9 +138,6 @@ export class InnoAuditSession {
   /**
    * Run a single audit within the session.
    * Results are accumulated for the final submission.
-   *
-   * @param req       The audit request.
-   * @param overrides Optional per-audit option overrides (merged with session defaults).
    */
   async audit(
     req: AuditRequest,
@@ -151,11 +154,20 @@ export class InnoAuditSession {
   }
 
   /**
-   * Finish the session: submit all accumulated evidence to Inno Platform
-   * and optionally open the SUI explorer.
+   * Finish the session: upload accumulated evidence to Walrus.
+   *
+   * @param opts.batch  If true (default), bundle all evidence into a single
+   *                    upload.  If false, upload each evidence individually.
+   * @param opts.uploadContent  Custom content to upload instead of the default
+   *                            JSON evidence bundle (e.g. an HTML report).
    */
   async finish(opts?: {
     openExplorer?: boolean;
+    verifyBlobs?: boolean;
+    /** Bundle all evidence into one Walrus blob (default: true). */
+    batch?: boolean;
+    /** Upload custom content instead of the evidence JSON bundle. */
+    uploadContent?: { data: string; contentType: string };
   }): Promise<InnoSessionResult> {
     if (this.state !== "started") {
       throw new Error(`InnoAuditSession: cannot finish() in state "${this.state}".`);
@@ -163,86 +175,120 @@ export class InnoAuditSession {
 
     this.state = "finished";
 
-    let innoMeta: InnoAuditMeta | undefined;
+    const innoMeta: InnoAuditMeta = {};
+    const uploads: WalrusUploadResult[] = [];
 
-    if (this.wallet && this.results.length > 0) {
-      const walletMeta = this.buildWalletMeta();
+    if (this.wallet) {
+      innoMeta.wallet = {
+        address: this.wallet.address,
+        bech32: this.wallet.bech32,
+      };
+      innoMeta.walletExplorerUrl = getSuiExplorerAccountUrl(this.wallet.address, this.network);
+    }
 
-      // Build combined evidence + report for submission
-      const evidencePackages = this.results.map(r => r.evidence);
-      const reportSections = this.results.map(r =>
-        renderEvidenceReportEN(r.evidence, {
-          maxPreviewChars: 120,
-          includeNotes: true,
-          includeDetails: false,
-        }),
-      );
-      const combinedReport = reportSections.join("\n\n---\n\n");
-
-      // Use the first result's requestId as the session-level identifier,
-      // or build a composite one.
-      const sessionRequestId = this.results.length === 1
-        ? this.results[0]!.requestId
-        : `session-${this.results[0]!.requestId}-${this.results.length}runs`;
-
-      // Wrap all evidence packages in a session envelope
-      const sessionEvidence: EvidencePackageV0 & { sessionEntries?: EvidencePackageV0[] } = {
-        ...this.results[this.results.length - 1]!.evidence,
-        sessionEntries: evidencePackages,
+    if (this.results.length > 0 || opts?.uploadContent) {
+      const uploadOpts: UploadBytesOptions = {
+        ...this.config.uploadDefaults,
+        ...(this.wallet ? { sendObjectTo: this.wallet.address } : {}),
       };
 
-      try {
-        const submission = await this.connect.submitAuditResult({
-          walletAddress: this.wallet.multisigAddress,
-          evidencePackage: sessionEvidence,
-          reportMarkdown: combinedReport,
-          requestId: sessionRequestId,
-        });
-
-        innoMeta = {
-          ...walletMeta,
-          submission,
-          txExplorerUrl: getSuiExplorerTxUrl(submission.txDigest, this.network),
-        };
-
-        if (opts?.openExplorer) {
+      if (opts?.uploadContent) {
+        // Custom content (e.g. HTML report)
+        try {
+          const base64 = Buffer.from(opts.uploadContent.data, "utf-8").toString("base64");
+          const upload = await this.connect.uploadBytes(base64, {
+            contentType: opts.uploadContent.contentType,
+            ...uploadOpts,
+          });
+          uploads.push(upload);
+        } catch (err) {
+          if (!this.continueOnError) throw err;
+          console.warn(
+            "[InnoConnect] Custom content upload failed:",
+            err instanceof InnoConnectError ? err.message : err,
+          );
+        }
+      } else if (opts?.batch !== false) {
+        // Default: single upload with all evidence bundled as JSON
+        try {
+          const bundle = this.results.map((r) => r.evidence);
+          const json = JSON.stringify(bundle);
+          const base64 = Buffer.from(json, "utf-8").toString("base64");
+          const upload = await this.connect.uploadBytes(base64, {
+            contentType: "application/json",
+            ...uploadOpts,
+          });
+          uploads.push(upload);
+        } catch (err) {
+          if (!this.continueOnError) throw err;
+          console.warn(
+            "[InnoConnect] Batch evidence upload failed:",
+            err instanceof InnoConnectError ? err.message : err,
+          );
+        }
+      } else {
+        // Individual uploads (one per audit result)
+        for (const result of this.results) {
           try {
-            await openSuiExplorer(submission.txDigest, this.network);
-          } catch {
-            // Best-effort
+            const upload = await this.connect.submitEvidence(
+              result.evidence,
+              uploadOpts,
+            );
+            uploads.push(upload);
+          } catch (err) {
+            if (!this.continueOnError) throw err;
+            console.warn(
+              "[InnoConnect] Evidence upload failed:",
+              err instanceof InnoConnectError ? err.message : err,
+            );
           }
         }
-      } catch (err) {
-        if (!this.continueOnError) throw err;
-        console.warn(
-          "[InnoConnect] Session submission failed:",
-          err instanceof InnoConnectError ? err.message : err,
-        );
-
-        innoMeta = walletMeta;
       }
-    } else if (this.wallet) {
-      innoMeta = this.buildWalletMeta();
+
+      // Optionally verify blob existence
+      if (opts?.verifyBlobs) {
+        for (const upload of uploads) {
+          try {
+            await this.connect.blobExists(upload.blobId);
+          } catch {
+            // Verification is best-effort
+          }
+        }
+      }
+
+      // Attach first successful upload to meta
+      if (uploads.length > 0) {
+        const first = uploads[0]!;
+        const blobObjectId = first.storeResponse?.newlyCreated?.blobObject.id
+          ?? first.storeResponse?.alreadyCertified?.object;
+
+        innoMeta.submission = {
+          blobId: first.blobId,
+          blobUrl: first.blobUrl,
+          blobObjectId,
+        };
+      }
+
+      if (opts?.openExplorer && uploads.length > 0) {
+        const blobUrl = getWalrusBlobUrl(
+          uploads[0]!.blobId,
+          this.config.inno.aggregatorUrl,
+        );
+        try {
+          const { openInBrowser } = await import("./explorer.js");
+          await openInBrowser(blobUrl);
+        } catch {
+          // Best-effort
+        }
+      }
     }
+
+    const hasInnoData = innoMeta.wallet !== undefined || innoMeta.submission !== undefined;
 
     return {
       auditResults: this.results,
-      inno: innoMeta,
-    };
-  }
-
-  // -----------------------------------------------------------------------
-  // Internal helpers
-  // -----------------------------------------------------------------------
-
-  private buildWalletMeta(): InnoAuditMeta {
-    return {
-      wallet: {
-        multisigAddress: this.wallet!.multisigAddress,
-        participants: this.wallet!.participants,
-        threshold: this.wallet!.threshold,
-      },
-      walletExplorerUrl: getSuiExplorerAccountUrl(this.wallet!.multisigAddress, this.network),
+      inno: hasInnoData ? innoMeta : undefined,
+      uploads: uploads.length > 0 ? uploads : undefined,
     };
   }
 
@@ -253,14 +299,9 @@ export class InnoAuditSession {
   /** Current session state. */
   get sessionState(): SessionState { return this.state; }
 
-  /** Wallet info (without userKeyShare). Undefined until start() succeeds. */
-  get walletInfo(): Omit<MultisigWalletResponse, "userKeyShare"> | undefined {
-    if (!this.wallet) return undefined;
-    return {
-      multisigAddress: this.wallet.multisigAddress,
-      participants: this.wallet.participants,
-      threshold: this.wallet.threshold,
-    };
+  /** Wallet info. Undefined until start() succeeds. */
+  get walletInfo(): WalletAddress | undefined {
+    return this.wallet;
   }
 
   /** Number of audits completed so far. */

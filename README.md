@@ -31,6 +31,7 @@ Evidence-first • Provenance-aware • Obfuscation-resistant
 - [Audit vs enforce (blocking)](#audit-vs-enforce-blocking-dangerous-text)
 - [Red-team testing and adding rules](#red-team-testing-and-adding-rules)
 - [Red-team output: report and evidence](#5-red-team-output-report-and-evidence-one-file-per-run)
+- [SUI Wallet & Walrus Evidence Storage](#sui-wallet--walrus-evidence-storage-testnet-preview)
 - [Build, test, and performance](#build-test-and-performance)
 - [License](#license)
 
@@ -966,6 +967,180 @@ Each run produces **one report** and **one evidence** file, keyed by run timesta
 - Each `evidence` in `entries` is a full **EvidencePackageV0** (same shape as single-request evidence in the main SDK).
 
 The directory **`examples/red-team/out/`** is gitignored (generated artifacts).
+
+---
+
+## SUI Wallet & Walrus Evidence Storage (Testnet Preview)
+
+> **Status:** Testnet MVP — designed for evaluation and integration testing. The SUI/Walrus integration is optional; all audit features work fully offline without it.
+
+Schnabel can store audit evidence on **Walrus** (SUI's decentralized blob storage) and associate it with a **SUI wallet**, creating an immutable, on-chain audit trail. This is powered by the **Inno Platform** API which handles wallet creation and Walrus interactions.
+
+### What this enables
+
+| Feature | Description |
+|---------|-------------|
+| **SUI Wallet** | Per-session SUI wallet address creation via Inno Platform. Future ASA-standard multi-signature wallet support is planned. |
+| **Walrus Evidence Storage** | Audit evidence (JSON) is uploaded to Walrus decentralized storage. Each upload returns a `blob_id` and `blob_url` for permanent, content-addressed retrieval. |
+| **On-chain Audit Trail** | Evidence blobs are linked to the SUI wallet. Explorer URLs (suiscan.xyz) let you verify wallet activity and blob metadata on-chain. |
+| **Tamper-proof** | Once stored on Walrus, evidence cannot be modified. The blob ID is derived from the content hash — any change produces a different ID. |
+
+### Architecture
+
+```text
+runAudit()  →  AuditResult (local)
+                    │
+                    ▼
+         InnoAuditSession.finish()
+                    │
+            ┌───────┴───────┐
+            ▼               ▼
+     SUI Wallet        Walrus Upload
+  (Inno Platform)    (via Inno Platform)
+            │               │
+            ▼               ▼
+    suiscan.xyz       blob_url (permanent)
+```
+
+The audit pipeline runs entirely locally. The SUI/Walrus layer is a **post-audit submission step** — if the Inno Platform is unavailable, audits still run and results are saved locally.
+
+### Setup
+
+**1. Environment variables** — Create a `.env` file in the project root:
+
+```bash
+# Inno Platform API
+INNO_API_BASE_URL=https://dev.lumiwavelab.com:51121
+INNO_API_VERSION=v1.0
+# INNO_API_KEY=          # Optional: API key if required
+
+# Walrus (SUI decentralized storage)
+WALRUS_PUBLISHER_URL=https://walrus-testnet-publisher.nodeinfra.com
+WALRUS_AGGREGATOR_URL=https://walrus-testnet-aggregator.nodeinfra.com
+
+# SUI Network
+SUI_NETWORK=testnet
+```
+
+**2. Run the red-team with Walrus integration:**
+
+```bash
+npm run redteam
+```
+
+When `INNO_API_BASE_URL` is set, the runner will:
+1. Create a SUI wallet via Inno Platform
+2. Run all 81 attack scenarios (same as without Walrus)
+3. Bundle all evidence into a single JSON blob and upload to Walrus
+4. Print the blob URL for verification
+
+If `INNO_API_BASE_URL` is not set, the runner skips the SUI/Walrus step and runs audits locally only.
+
+### Session lifecycle (programmatic usage)
+
+```typescript
+import { createInnoAuditSession } from "schnabel-open-audit-sdk";
+
+const session = createInnoAuditSession({
+  inno: {
+    baseUrl: "https://dev.lumiwavelab.com:51121",
+    apiVersion: "v1.0",
+    publisherUrl: "https://walrus-testnet-publisher.nodeinfra.com",
+    aggregatorUrl: "https://walrus-testnet-aggregator.nodeinfra.com",
+  },
+  auditDefaults: { scanners, scanOptions: { mode: "audit" } },
+  walletOptions: { customerId: 1, nickname: "my-session" },
+  network: "testnet",
+});
+
+// 1. Start — creates a SUI wallet
+await session.start();
+console.log(session.walletInfo?.address);
+
+// 2. Audit — run as many audits as needed (results accumulate)
+const result1 = await session.audit(request1);
+const result2 = await session.audit(request2);
+
+// 3. Finish — upload all evidence to Walrus as a single JSON blob
+const sessionResult = await session.finish({ openExplorer: true });
+
+// sessionResult.inno?.submission.blobId   → Walrus blob ID
+// sessionResult.inno?.submission.blobUrl  → direct retrieval URL
+// sessionResult.uploads                   → upload details
+```
+
+### SUI Wallet — key management
+
+When a wallet is created, the Inno Platform returns:
+
+| Field | Description |
+|-------|-------------|
+| `address` | SUI wallet address (public, safe to display) |
+| `pk` | Private key in hex format (only if `showPrivateKey: true`) |
+| `bech32` | Private key in SUI bech32 format (`suiprivkey...`) |
+
+**Important:**
+- The SDK does **not** log private keys (`pk`, `bech32`) to the console or include them in evidence/reports.
+- If your application calls the Inno API directly with `showPrivateKey: true`, store the returned keys securely.
+- Wallet addresses are used for associating Walrus blob objects (`sendObjectTo`) and for explorer URLs.
+- Future versions will support **ASA-standard multi-signature wallets** for enterprise-grade key management.
+
+### Walrus evidence format
+
+Evidence is uploaded as a JSON array of `EvidencePackageV0` objects (one per audit):
+
+```json
+[
+  {
+    "schema": "schnabel-evidence-v0",
+    "requestId": "rt-scenario-id-...",
+    "generatedAtMs": 1770550729714,
+    "findings": [...],
+    "decision": { "action": "challenge", "risk": "high" },
+    "integrity": { "algo": "sha256", "rootHash": "..." }
+  },
+  ...
+]
+```
+
+Retrieve stored evidence via the blob URL:
+```bash
+curl https://walrus-testnet-aggregator.nodeinfra.com/v1/blobs/<BLOB_ID>
+```
+
+### Walrus upload options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `epochs` | `1` | Storage duration (max `53`). Each epoch ≈ 1 day on testnet. |
+| `deletable` | `false` | Whether the blob can be deleted after upload. |
+| `sendObjectTo` | wallet address | SUI address to receive the blob storage object. |
+| `batch` | `true` | Bundle all evidence into one blob (recommended to avoid rate limits). |
+
+### Error handling
+
+By default (`continueOnInnoError: true`), Inno Platform errors are caught and logged as warnings — audits continue running locally. Set `continueOnInnoError: false` to make errors propagate.
+
+```text
+# Example output when wallet creation fails but audits continue:
+🔗 Inno Platform: https://dev.lumiwavelab.com:51121
+   ⚠️  Wallet creation failed — audits will run locally only
+
+# ... 81 scenarios run normally ...
+
+📊 Summary: 81 Passed, 0 Failed
+```
+
+### HTML report (local)
+
+In addition to Walrus evidence, the red-team runner generates an **HTML report** with a visual dashboard (dark theme, collapsible scenario details). This report is saved locally:
+
+```text
+📄 Report (MD):   examples/red-team/out/reports/<timestamp>.redteam.report.en.md
+📄 Report (HTML): examples/red-team/out/reports/<timestamp>.redteam.report.html
+```
+
+Open the HTML file in a browser for an interactive view of all audit results.
 
 ---
 
